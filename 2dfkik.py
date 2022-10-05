@@ -1,6 +1,7 @@
 # By Aditya Abhyankar, September 2022
 from tkinter import *
 import numpy as np
+np.set_printoptions(suppress=True)
 
 # Window size. Note: 1920/2 = 960 will be the width of each half of the display (2D | 3D)
 window_w = 1700
@@ -15,25 +16,48 @@ root.geometry(str(window_w) + "x" + str(window_h))  # window size hardcoded
 w = Canvas(root, width=window_w, height=window_h)
 
 
-# IMMEDIATE TODO: FIX ANGLE DATA REPRESENTATION!!
-class Joint2D:
-    def __init__(self, parent, angle, limblen):
+# Tack on the extra 1 at the end to make it a 3d vector
+def three(point:np.ndarray):
+    assert len(point) == 2
+    return np.append(point, 1)
+
+
+# Remove extra 1 at the end to make it a 3d vector
+def two(point:np.ndarray):
+    assert len(point) == 3 and point[2] == 1  # make sure the last entry is a 1!
+    return point[:2]
+
+
+class Limb2D:
+    def __init__(self, parent, angle, limblen, worldloc=None):
         '''
-            parent: Either another Joint or None if root.
-            angle: Angle (radians) that the limb extending out from this joint will make with the limb
-                   connecting the parent to this one. If this is the root, this is just wrt to the
-                   world +x-axis.
-            limblen: Length of limb from FROM THE PARENT OF THE JOINT TO THIS ONE. If this is the root,
-                     this is just the displacement of the joint's frame of reference wrt the world origin.
+            parent: Either another Limb or None if root.
+            angle: Angle (radians) that the limb makes wrt to the +xaxis of the parent's reference frame.
+                   If it's the root (and thus has no parent), then it's wrt to the world's +xaxis.
+            limblen: Length of limb.
+            worldloc: Only has a value if the parent is None, i.e. it's the root limb. In that case worldloc is the
+                      location of the proximal joint of this limb in the world.
+
+            NOTE: The frame of reference of each limb has: 1) Its +x-axis aligned with the limb and points from
+                  the proximal joint to the distal one, 2) its y-axis perpendicular to the x-axis (counterclockwise
+                  90 degrees), and 3) is positioned at the location of the proximal joint.
+
+                  Thus self.H is the homogeneous matrix bringing us from the frame of reference of the proximal joint
+                  to that of the the parent limb's proximal joint.
+
+            NOTE 2: To have a tree-like structure where there are multiple limbs sticking out of the ROOT joint,
+                    just have multiple, separate kinematic chains (i.e. don't include the second one here).
         '''
 
+        self.limblen = limblen
         self.parent = parent
         if parent is not None:
-            self.d = np.array([limblen * np.cos(parent.angle), limblen * np.sin(parent.angle)])
+            assert worldloc is None
+            self.d = np.array([parent.limblen, 0])
             self.parent.children.append(self)
         else:
-            assert isinstance(limblen, np.ndarray)  # the lazy approach, asking the user to handle special case :)
-            self.d = limblen
+            assert worldloc is not None
+            self.d = worldloc
 
         self.angle, self.R, self.H = None, None, None
         self.set_angle(angle)
@@ -52,34 +76,38 @@ class Joint2D:
         point = self.local_to_parent(point)
         return self.parent.local_to_world(point) if self.parent is not None else point
 
-    def origin(self):
-        return self.local_to_world(np.array([0, 0, 1]))
+    # Returns proximal joint in target frame
+    def proximal(self, world=True):
+        local = three(np.array([0, 0]))
+        target = self.local_to_world(local) if world else self.local_to_parent(local)
+        return two(target)
 
-    def origin_(self):
-        return self.origin()[:2]
+    # Returns distal joint in target frame
+    def distal(self, world=True):
+        local = three(np.array([self.limblen, 0]))
+        target = self.local_to_world(local) if world else self.local_to_parent(local)
+        return two(target)
 
 
-def get_line_points(joint, pts=[]):
+def get_line_points(limb, pts=[]):
     # Returns as many pairs of points as there are limbs
-    # NOTE: End-effectors are joints themselves! Keep that in mind when counting limbs.
-    for child in joint.children:
-        pts.append([joint.origin()[:2], child.origin()[:2]])
+    pts.append([limb.proximal(), limb.distal()])
+    for child in limb.children:
         get_line_points(child, pts)
 
     return pts
 
 
-# Build arm
-dtheta = -np.pi / 20
-n_limbs = 5
+# Build Kinematic Chain
 pos = np.array([window_w/2, window_h/2])
-root_joint = Joint2D(None, 0.0, pos)
-prev = root_joint
-for i in range(n_limbs):
-    prev = Joint2D(prev, dtheta, 100)
+limblen = 50
+n_limbs = 10
+root_limb = Limb2D(None, 0.0, limblen, worldloc=pos)
 
-j = Joint2D(root_joint, np.pi/2, 100)  # should not overlap joint 1!
-
+prev = root_limb
+dtheta = np.pi/20
+for i in range(n_limbs-1):
+    prev = Limb2D(prev, dtheta, limblen)
 
 # Display Parameters
 joint_radius = 10
@@ -87,17 +115,25 @@ joint_radius = 10
 
 # Main runner
 def runstep():
-    global w, root_joint, joint_radius
+    global w, root_limb, joint_radius
 
     w.configure(background='black')
     w.delete('all')
     # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
-    origin = root_joint.origin_()
-    w.create_oval(*(origin - joint_radius), *(origin + joint_radius), fill='blue')
-    for limb in get_line_points(root_joint):
-        p0, p1 = limb[0], limb[1]
+    root_joint_loc = root_limb.proximal()
+    w.create_oval(*(root_joint_loc - joint_radius), *(root_joint_loc + joint_radius), fill='blue')
+    for pts in get_line_points(root_limb):
+        p0, p1 = pts[0], pts[1]
         w.create_line(*p0, *p1, fill='red')
         w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
+
+
+    # origin = root_joint.origin_()
+    # w.create_oval(*(origin - joint_radius), *(origin + joint_radius), fill='blue')
+    # for limb in get_line_points(root_joint):
+    #     p0, p1 = limb[0], limb[1]
+    #     w.create_line(*p0, *p1, fill='red')
+    #     w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
 
 
 
