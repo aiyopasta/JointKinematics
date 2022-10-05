@@ -15,6 +15,7 @@ root.geometry(str(window_w) + "x" + str(window_h))  # window size hardcoded
 w = Canvas(root, width=window_w, height=window_h)
 
 
+# IMMEDIATE TODO: FIX ANGLE DATA REPRESENTATION!!
 class Joint2D:
     def __init__(self, parent, angle, limblen):
         '''
@@ -51,18 +52,54 @@ class Joint2D:
         point = self.local_to_parent(point)
         return self.parent.local_to_world(point) if self.parent is not None else point
 
+    def origin(self):
+        return self.local_to_world(np.array([0, 0, 1]))
 
-# Build skeleton
+    def origin_(self):
+        return self.origin()[:2]
 
+
+def get_line_points(joint, pts=[]):
+    # Returns as many pairs of points as there are limbs
+    # NOTE: End-effectors are joints themselves! Keep that in mind when counting limbs.
+    for child in joint.children:
+        pts.append([joint.origin()[:2], child.origin()[:2]])
+        get_line_points(child, pts)
+
+    return pts
+
+
+# Build arm
+dtheta = -np.pi / 20
+n_limbs = 5
+pos = np.array([window_w/2, window_h/2])
+root_joint = Joint2D(None, 0.0, pos)
+prev = root_joint
+for i in range(n_limbs):
+    prev = Joint2D(prev, dtheta, 100)
+
+j = Joint2D(root_joint, np.pi/2, 100)  # should not overlap joint 1!
+
+
+# Display Parameters
+joint_radius = 10
 
 
 # Main runner
 def runstep():
-    global w
+    global w, root_joint, joint_radius
 
     w.configure(background='black')
     w.delete('all')
     # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
+    origin = root_joint.origin_()
+    w.create_oval(*(origin - joint_radius), *(origin + joint_radius), fill='blue')
+    for limb in get_line_points(root_joint):
+        p0, p1 = limb[0], limb[1]
+        w.create_line(*p0, *p1, fill='red')
+        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
+
+
 
     # ———————————————————————————————————————————————————————————————————————————————————————————————
     # MAIN ALGORITHM
