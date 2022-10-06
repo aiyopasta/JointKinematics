@@ -16,6 +16,14 @@ root.geometry(str(window_w) + "x" + str(window_h))  # window size hardcoded
 w = Canvas(root, width=window_w, height=window_h)
 
 
+# Coordinate Shift
+def A(point:np.ndarray):
+    assert len(point) == 2
+    point[0] = point[0] + window_w/2
+    point[1] = -point[1] + window_h/2
+    return point
+
+
 # Tack on the extra 1 at the end to make it a 3d vector
 def three(point:np.ndarray):
     assert len(point) == 2
@@ -91,7 +99,7 @@ class Limb2D:
 
 def get_line_points(limb, pts=[]):
     # Returns as many pairs of points as there are limbs
-    pts.append([limb.proximal(), limb.distal()])
+    pts.append([A(limb.proximal()), A(limb.distal())])
     for child in limb.children:
         get_line_points(child, pts)
 
@@ -99,7 +107,7 @@ def get_line_points(limb, pts=[]):
 
 
 # Build Kinematic Chain
-pos = np.array([window_w/2, window_h/2])
+pos = np.array([0, 0])
 limblen = 50
 n_limbs = 10
 root_limb = Limb2D(None, 0.0, limblen, worldloc=pos)
@@ -120,22 +128,12 @@ def runstep():
     w.configure(background='black')
     w.delete('all')
     # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
-    root_joint_loc = root_limb.proximal()
+    root_joint_loc = A(root_limb.proximal())
     w.create_oval(*(root_joint_loc - joint_radius), *(root_joint_loc + joint_radius), fill='blue')
     for pts in get_line_points(root_limb):
         p0, p1 = pts[0], pts[1]
         w.create_line(*p0, *p1, fill='red')
         w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
-
-
-    # origin = root_joint.origin_()
-    # w.create_oval(*(origin - joint_radius), *(origin + joint_radius), fill='blue')
-    # for limb in get_line_points(root_joint):
-    #     p0, p1 = limb[0], limb[1]
-    #     w.create_line(*p0, *p1, fill='red')
-    #     w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
-
-
 
     # ———————————————————————————————————————————————————————————————————————————————————————————————
     # MAIN ALGORITHM
