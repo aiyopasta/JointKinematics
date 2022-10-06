@@ -24,6 +24,13 @@ def A(point:np.ndarray):
     return point
 
 
+def Ainv(point:np.ndarray):
+    assert len(point) == 2
+    point[0] -= window_w / 2
+    point[1] -= window_h / 2; point[1] *= -1
+    return point
+
+
 # Tack on the extra 1 at the end to make it a 3d vector
 def three(point:np.ndarray):
     assert len(point) == 2
@@ -96,20 +103,59 @@ class Limb2D:
         target = self.local_to_world(local) if world else self.local_to_parent(local)
         return two(target)
 
+    def end_effectors(self, ends=[]):
+        if len(self.children) == 0:
+            ends.append(self)
+            return
+
+        for child in self.children:
+            child.end_effectors(ends)
+
+        return ends
+
+    def end_pos(self):
+        return self.end_effectors()[0].distal()
+
+    def first_end_effector_chain(self, limbs=[]):
+        limbs.append(self)
+        if len(self.children) == 0:
+            return limbs
+
+        return self.children[0].first_end_effector_chain(limbs)
+
 
 def get_line_points(limb, pts=[]):
+    if len(pts) == 0:
+        pts = []
+
     # Returns as many pairs of points as there are limbs
-    pts.append([A(limb.proximal()), A(limb.distal())])
+    pts.append(np.array([A(limb.proximal()), A(limb.distal())]))
     for child in limb.children:
         get_line_points(child, pts)
 
     return pts
 
 
+# Computes the Jacobian of the joint positions wrt joint angles for the kinematic
+# chain leading up to the first end effector via DFS starting at the root limb.
+def jacobian_first_end_effector(chain):
+    end_eff_pos = chain[-1].distal()
+    J = None
+    for limb in chain:
+        r = end_eff_pos - limb.proximal()
+        col = np.array([[-r[1], r[0]]]).T
+        if J is None:
+            J = col
+        else:
+            J = np.hstack([J, col])
+
+    return J
+
+
 # Build Kinematic Chain
 pos = np.array([0, 0])
-limblen = 50
-n_limbs = 10
+limblen = 70
+n_limbs = 8
 root_limb = Limb2D(None, 0.0, limblen, worldloc=pos)
 
 prev = root_limb
@@ -117,32 +163,76 @@ dtheta = np.pi/20
 for i in range(n_limbs-1):
     prev = Limb2D(prev, dtheta, limblen)
 
+# IK Params
+target = np.array([0, limblen*(n_limbs)])
+
+
 # Display Parameters
 joint_radius = 10
 
 
 # Main runner
-def runstep():
-    global w, root_limb, joint_radius
-
+def run():
+    global w, root_limb, target, joint_radius, i, target
     w.configure(background='black')
-    w.delete('all')
-    # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
-    root_joint_loc = A(root_limb.proximal())
-    w.create_oval(*(root_joint_loc - joint_radius), *(root_joint_loc + joint_radius), fill='blue')
-    for pts in get_line_points(root_limb):
-        p0, p1 = pts[0], pts[1]
-        w.create_line(*p0, *p1, fill='red')
-        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
 
-    # ———————————————————————————————————————————————————————————————————————————————————————————————
-    # MAIN ALGORITHM
-    w.update()
+    while True:
+        w.delete('all')
+        # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
+        root_joint_loc = A(root_limb.proximal())
+        w.create_oval(*(root_joint_loc - joint_radius), *(root_joint_loc + joint_radius), fill='blue')
+        for pair in get_line_points(root_limb):
+            p0, p1 = pair[0], pair[1]
+            w.create_line(*p0, *p1, fill='red')
+            w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
+
+        w.create_oval(*A(target - joint_radius), *A(target + joint_radius), fill='green')
+
+        # ———————————————————————————————————————————————————————————————————————————————————————————————
+        # MAIN ALGORITHM
+        chain = root_limb.first_end_effector_chain(limbs=[])
+        J = jacobian_first_end_effector(chain)
+        current = chain[-1].distal()
+        theta_n = np.array([limb.angle for limb in chain])
+        theta_np1 = (theta_n + np.dot(np.linalg.pinv(J), (target - current)))
+        for theta, limb in zip(theta_np1, chain):
+            limb.set_angle(theta)
+
+        w.update()
 
 
 # Key bind
 def key_pressed(event):
     pass
+
+# MOUSE METHODS —————————————————————————————————————————————
+def mouse_click(event):
+    pass
+
+
+def mouse_release(event):
+    pass
+
+
+def left_drag(event):
+    pass
+
+
+def motion(event):
+    global target, limblen, n_limbs
+    screen_pt = Ainv(np.array([event.x, event.y]))
+    norm = np.linalg.norm(screen_pt)
+    if norm > (limblen * n_limbs) * 0.99:
+        screen_pt = 0.99 * (limblen * n_limbs) * (screen_pt / np.linalg.norm(screen_pt))
+
+    target = screen_pt
+
+
+# Mouse bind
+w.bind('<Motion>', motion)
+w.bind("<Button-1>", mouse_click)
+w.bind("<ButtonRelease-1>", mouse_release)
+w.bind('<B1-Motion>', left_drag)
 
 
 root.bind("<KeyPress>", key_pressed)
@@ -150,7 +240,7 @@ w.pack()
 
 # We call the main function
 if __name__ == '__main__':
-    runstep()
+    run()
 
 # Necessary line for Tkinter
 mainloop()
