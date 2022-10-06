@@ -222,8 +222,8 @@ def motion(event):
     global target, limblen, n_limbs
     screen_pt = Ainv(np.array([event.x, event.y]))
     norm = np.linalg.norm(screen_pt)
-    if norm > (limblen * n_limbs) * 0.99:
-        screen_pt = 0.99 * (limblen * n_limbs) * (screen_pt / np.linalg.norm(screen_pt))
+    if norm > (limblen * n_limbs) * 0.999:
+        screen_pt = 0.999 * (limblen * n_limbs) * (screen_pt / np.linalg.norm(screen_pt))
 
     target = screen_pt
 
