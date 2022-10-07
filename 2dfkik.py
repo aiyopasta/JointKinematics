@@ -31,6 +31,17 @@ def Ainv(point:np.ndarray):
     return point
 
 
+# Quadratic solve
+def min_t(a, b, c):
+    disc = (b * b) - (4 * a * c)
+    denom = 2 * a
+    t = -1
+    if disc >= 0:
+        t = min((-b + np.sqrt(disc)) / denom, (-b - np.sqrt(disc)) / denom)
+
+    return t
+
+
 # Tack on the extra 1 at the end to make it a 3d vector
 def three(point:np.ndarray):
     assert len(point) == 2
@@ -44,6 +55,8 @@ def two(point:np.ndarray):
 
 
 class Limb2D:
+    next_id = 0
+
     def __init__(self, parent, angle, limblen, worldloc=None):
         '''
             parent: Either another Limb or None if root.
@@ -77,6 +90,9 @@ class Limb2D:
         self.angle, self.R, self.H = None, None, None
         self.set_angle(angle)
         self.children = []
+
+        self.id = Limb2D.next_id
+        Limb2D.next_id += 1
 
     def set_angle(self, angle):
         self.angle = angle
@@ -123,6 +139,9 @@ class Limb2D:
 
         return self.children[0].first_end_effector_chain(limbs)
 
+    def __repr__(self):
+        return 'Limb #'+str(self.id)
+
 
 def get_line_points(limb, pts=[]):
     if len(pts) == 0:
@@ -137,13 +156,27 @@ def get_line_points(limb, pts=[]):
 
 
 # Computes the Jacobian of the joint positions wrt joint angles for the kinematic
-# chain leading up to the first end effector via DFS starting at the root limb.
-def jacobian_first_end_effector(chain):
-    end_eff_pos = chain[-1].distal()
+# chain leading up to the end effector of the input chain, via DFS starting at the root limb.
+def jacobian(chain, wrt=-1):
+    '''
+        wrt: The int indicating the limb (or # of angles) that the Jacobian is taken with respect to.
+             -1 indicates it is for the end effector, thus all the angles are included.
+
+        NOTE: By default, if wrt != -1 and is less than len(chain)-1, the # of columns of the Jacobian
+              stays the same, but the block matrices corresponding to limbs that are ancestors of the
+              limb in question are all just zeroed out. This is to update whole theta vector in one
+              fell swoop without size readjustments.
+    '''
+    end_eff_pos = chain[wrt].distal()
+    col_zero = np.array([[0, 0]]).T
+    if wrt == -1:
+        wrt = len(chain) - 1
     J = None
-    for limb in chain:
+    for i, limb in enumerate(chain):
         r = end_eff_pos - limb.proximal()
-        col = np.array([[-r[1], r[0]]]).T
+
+        # If with respect to end effector, i will never be greater than wrt.
+        col = col_zero if i > wrt else np.array([[-r[1], r[0]]]).T
         if J is None:
             J = col
         else:
@@ -152,10 +185,47 @@ def jacobian_first_end_effector(chain):
     return J
 
 
+# Returns a list of limbs intersecting the sphere of influence, in order of connection.
+def limbs_in_soi(chain):
+    global collider, soi
+    inside = []
+    for limb in chain:
+        prox_in = np.linalg.norm(limb.proximal() - collider) < soi
+        dist_in = np.linalg.norm(limb.distal() - collider) < soi
+        if prox_in or dist_in:
+            inside.append(limb)
+            continue
+
+        unit_prox_to_dist = limb.distal() - limb.proximal(); unit_prox_to_dist /= np.linalg.norm(unit_prox_to_dist)
+        center_to_prox = limb.proximal() - collider
+        d, f = unit_prox_to_dist, center_to_prox
+        a = np.dot(d, d)
+        b = 2 * np.dot(f, d)
+        c = np.dot(f, f) - (soi * soi)
+        if -1 < min_t(a, b, c) <= limblen:
+            inside.append(limb)
+
+    return inside
+
+
+# Gradient of sphere of influence potential function
+def grad_phi(chain, influenced_limbs, gain=1.):
+    global collider, soi
+
+    grad = np.zeros((len(chain), 1))
+    for limb in influenced_limbs:
+        J_i_trans = jacobian(chain, limb.id).T
+        mid = 0.5 * (limb.proximal() + limb.distal())
+        v = np.array([collider - mid]).T
+        grad += 2 * np.dot(J_i_trans, v)
+
+    return -gain * grad
+        
+
 # Build Kinematic Chain
 pos = np.array([0, 0])
-limblen = 70
-n_limbs = 8
+limblen = 100
+n_limbs = 5
 root_limb = Limb2D(None, 0.0, limblen, worldloc=pos)
 
 prev = root_limb
@@ -166,19 +236,32 @@ for i in range(n_limbs-1):
 # IK Params
 target = np.array([0, limblen*(n_limbs)])
 
+# Avoid params
+collider = np.array([-limblen*(n_limbs), 0])  # though it's not really a collider, just a point to avoid
+soi = 55  # Radius of sphere of influence. Also displayed.
 
-# Display Parameters
-joint_radius = 10
+# GUI Parameters
+mouse_mode = 0  # 0 = IK target, 1 = Collision object
+joint_radius = 7
+target_radius = 15
+collider_radius = 15  # simply for display, has no influence on algorithm
+assert collider_radius < soi
 
 
 # Main runner
-def run():
-    global w, root_limb, target, joint_radius, i, target
+def rerun():
+    global w, root_limb, target, joint_radius, i, target, target_radius, collider, soi, target_radius, collider_radius
     w.configure(background='black')
 
     while True:
         w.delete('all')
         # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
+
+        # Draw collider
+        w.create_oval(*A(collider - soi), *A(collider + soi), fill='#252400', outline='')
+        w.create_oval(*A(collider - collider_radius), *A(collider + collider_radius), fill='yellow', outline='')
+
+        # Draw robot arm
         root_joint_loc = A(root_limb.proximal())
         w.create_oval(*(root_joint_loc - joint_radius), *(root_joint_loc + joint_radius), fill='blue')
         for pair in get_line_points(root_limb):
@@ -186,24 +269,45 @@ def run():
             w.create_line(*p0, *p1, fill='red')
             w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
 
-        w.create_oval(*A(target - joint_radius), *A(target + joint_radius), fill='green')
+        # Draw target
+        w.create_oval(*A(target - target_radius), *A(target + target_radius), fill='green')
+
 
         # ———————————————————————————————————————————————————————————————————————————————————————————————
-        # MAIN ALGORITHM
+        # MAIN IK ALGORITHM
         chain = root_limb.first_end_effector_chain(limbs=[])
-        J = jacobian_first_end_effector(chain)
+
+        influenced = limbs_in_soi(chain)
+        grad_phi(chain, influenced)
+
+        J = jacobian(chain)
         current = chain[-1].distal()
         theta_n = np.array([limb.angle for limb in chain])
-        theta_np1 = (theta_n + np.dot(np.linalg.pinv(J), (target - current)))
-        for theta, limb in zip(theta_np1, chain):
+        # theta_nplus1 = (theta_n + np.dot(np.linalg.pinv(J), (target - current)))
+        theta_nplus1 = np.array([theta_n]).T + grad_phi(chain, influenced, gain=0.000001)
+        for theta, limb in zip(theta_nplus1.T[0], chain):
             limb.set_angle(theta)
+
+        # TODO: FOR COLLISIONS
+        # Idea: 1. Calculate limbs within sphere of influence.
+        #       2. For each of those limbs, compute a separate kinematic chain (up until proximal joint
+        #          of the limb in question).
+        #       3. Compute Jacobian for each of those kinematic chains (in exactly the same way as for end effector
+        #          except now the end effector is the midpoint of one of the possibly non-end-effector limbs.)
+        #       4. Compute the expression Sum_i J_i^T (x_center_world - asteroid_center). Note that the Jacobians
+        #          results of each summand will be of different size, thus you need to add zeroes for any angles not
+        #          included in each kinematic chain.
+
 
         w.update()
 
 
 # Key bind
 def key_pressed(event):
-    pass
+    global mouse_mode
+    if event.char == 'x':
+        mouse_mode = (mouse_mode + 1) % 2
+
 
 # MOUSE METHODS —————————————————————————————————————————————
 def mouse_click(event):
@@ -219,13 +323,18 @@ def left_drag(event):
 
 
 def motion(event):
-    global target, limblen, n_limbs
+    global target, collider, limblen, n_limbs, mouse_mode
     screen_pt = Ainv(np.array([event.x, event.y]))
-    norm = np.linalg.norm(screen_pt)
-    if norm > (limblen * n_limbs) * 0.999:
-        screen_pt = 0.999 * (limblen * n_limbs) * (screen_pt / np.linalg.norm(screen_pt))
 
-    target = screen_pt
+    if mouse_mode == 0:
+        norm = np.linalg.norm(screen_pt)
+        if norm > (limblen * n_limbs) * 0.999:
+            screen_pt = 0.999 * (limblen * n_limbs) * (screen_pt / np.linalg.norm(screen_pt))
+
+        target = screen_pt
+
+    elif mouse_mode == 1:
+        collider = screen_pt
 
 
 # Mouse bind
@@ -240,7 +349,7 @@ w.pack()
 
 # We call the main function
 if __name__ == '__main__':
-    run()
+    rerun()
 
 # Necessary line for Tkinter
 mainloop()
