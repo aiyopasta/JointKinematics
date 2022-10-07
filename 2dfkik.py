@@ -250,7 +250,7 @@ running = False
 assert collider_radius < soi
 
 # Switches
-show_soi = True
+show_soi = False
 
 # Main runner
 def rerun():
@@ -274,15 +274,14 @@ def rerun():
         w.create_oval(*(root_joint_loc - joint_radius), *(root_joint_loc + joint_radius), fill='blue')
         for pair in get_line_points(root_limb):
             p0, p1 = pair[0], pair[1]
-            w.create_line(*p0, *p1, fill='red')
+            w.create_line(*p0, *p1, fill='red', width=4)
             w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
 
         # Draw target
         w.create_oval(*A(target - target_radius), *A(target + target_radius), fill='green')
 
-
         # ———————————————————————————————————————————————————————————————————————————————————————————————
-        # MAIN IK ALGORITHM
+        # MAIN IK ALGORITHM + Nullspace Collision Avoidance
         chain = root_limb.first_end_effector_chain(limbs=[])
 
         influenced = limbs_in_soi(chain)
@@ -298,7 +297,6 @@ def rerun():
         ik_update = np.array([np.dot(J_pinv, (target - current))]).T
         avoid_update = gain * grad_phi(chain, influenced)
         null_op = np.eye(J.shape[1]) - JpinvJ
-
         update = ik_update + np.dot(null_op, avoid_update)
 
         theta_nplus1 = np.array([theta_n]).T + update
