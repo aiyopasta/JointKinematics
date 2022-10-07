@@ -209,7 +209,7 @@ def limbs_in_soi(chain):
 
 
 # Gradient of sphere of influence potential function
-def grad_phi(chain, influenced_limbs, gain=1.):
+def grad_phi(chain, influenced_limbs):
     global collider, soi
 
     grad = np.zeros((len(chain), 1))
@@ -219,13 +219,13 @@ def grad_phi(chain, influenced_limbs, gain=1.):
         v = np.array([collider - mid]).T
         grad += 2 * np.dot(J_i_trans, v)
 
-    return -gain * grad
+    return -grad
         
 
 # Build Kinematic Chain
 pos = np.array([0, 0])
-limblen = 100
-n_limbs = 5
+limblen = 80
+n_limbs = 10
 root_limb = Limb2D(None, 0.0, limblen, worldloc=pos)
 
 prev = root_limb
@@ -234,31 +234,39 @@ for i in range(n_limbs-1):
     prev = Limb2D(prev, dtheta, limblen)
 
 # IK Params
+epochs = 10
 target = np.array([0, limblen*(n_limbs)])
-
 # Avoid params
 collider = np.array([-limblen*(n_limbs), 0])  # though it's not really a collider, just a point to avoid
-soi = 55  # Radius of sphere of influence. Also displayed.
+soi = 100  # Radius of sphere of influence. Also displayed.
+gain = 0.000004
 
 # GUI Parameters
 mouse_mode = 0  # 0 = IK target, 1 = Collision object
 joint_radius = 7
 target_radius = 15
 collider_radius = 15  # simply for display, has no influence on algorithm
+running = False
 assert collider_radius < soi
 
+# Switches
+show_soi = True
 
 # Main runner
 def rerun():
-    global w, root_limb, target, joint_radius, i, target, target_radius, collider, soi, target_radius, collider_radius
+    global w, root_limb, target, joint_radius, i, target, target_radius, collider, soi, target_radius,\
+        collider_radius, gain, show_soi, epochs, running
+
     w.configure(background='black')
 
-    while True:
+    for i in range(epochs):
+        running = True
         w.delete('all')
         # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
 
         # Draw collider
-        w.create_oval(*A(collider - soi), *A(collider + soi), fill='#252400', outline='')
+        if show_soi:
+            w.create_oval(*A(collider - soi), *A(collider + soi), fill='#252400', outline='')
         w.create_oval(*A(collider - collider_radius), *A(collider + collider_radius), fill='yellow', outline='')
 
         # Draw robot arm
@@ -288,7 +296,7 @@ def rerun():
         theta_n = np.array([limb.angle for limb in chain])
 
         ik_update = np.array([np.dot(J_pinv, (target - current))]).T
-        avoid_update = grad_phi(chain, influenced, gain=0.00001)
+        avoid_update = gain * grad_phi(chain, influenced)
         null_op = np.eye(J.shape[1]) - JpinvJ
 
         update = ik_update + np.dot(null_op, avoid_update)
@@ -297,18 +305,9 @@ def rerun():
         for theta, limb in zip(theta_nplus1.T[0], chain):
             limb.set_angle(theta)
 
-        # TODO: FOR COLLISIONS
-        # Idea: 1. Calculate limbs within sphere of influence.
-        #       2. For each of those limbs, compute a separate kinematic chain (up until proximal joint
-        #          of the limb in question).
-        #       3. Compute Jacobian for each of those kinematic chains (in exactly the same way as for end effector
-        #          except now the end effector is the midpoint of one of the possibly non-end-effector limbs.)
-        #       4. Compute the expression Sum_i J_i^T (x_center_world - asteroid_center). Note that the Jacobians
-        #          results of each summand will be of different size, thus you need to add zeroes for any angles not
-        #          included in each kinematic chain.
-
-
         w.update()
+
+    running = False
 
 
 # Key bind
@@ -332,7 +331,7 @@ def left_drag(event):
 
 
 def motion(event):
-    global target, collider, limblen, n_limbs, mouse_mode
+    global target, collider, limblen, n_limbs, mouse_mode, running
     screen_pt = Ainv(np.array([event.x, event.y]))
 
     if mouse_mode == 0:
@@ -344,6 +343,9 @@ def motion(event):
 
     elif mouse_mode == 1:
         collider = screen_pt
+
+    if not running:
+        rerun()
 
 
 # Mouse bind
