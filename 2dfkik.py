@@ -281,10 +281,19 @@ def rerun():
         grad_phi(chain, influenced)
 
         J = jacobian(chain)
+        J_pinv = np.linalg.pinv(J)
+        JpinvJ = np.dot(J_pinv, J)
+
         current = chain[-1].distal()
         theta_n = np.array([limb.angle for limb in chain])
-        # theta_nplus1 = (theta_n + np.dot(np.linalg.pinv(J), (target - current)))
-        theta_nplus1 = np.array([theta_n]).T + grad_phi(chain, influenced, gain=0.000001)
+
+        ik_update = np.array([np.dot(J_pinv, (target - current))]).T
+        avoid_update = grad_phi(chain, influenced, gain=0.00001)
+        null_op = np.eye(J.shape[1]) - JpinvJ
+
+        update = ik_update + np.dot(null_op, avoid_update)
+
+        theta_nplus1 = np.array([theta_n]).T + update
         for theta, limb in zip(theta_nplus1.T[0], chain):
             limb.set_angle(theta)
 
