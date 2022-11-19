@@ -110,14 +110,14 @@ class Limb2D:
     # Returns proximal joint in target frame
     def proximal(self, world=True):
         local = three(np.array([0, 0]))
-        target = self.local_to_world(local) if world else self.local_to_parent(local)
-        return two(target)
+        tg = self.local_to_world(local) if world else self.local_to_parent(local)
+        return two(tg)
 
     # Returns distal joint in target frame
     def distal(self, world=True):
         local = three(np.array([self.limblen, 0]))
-        target = self.local_to_world(local) if world else self.local_to_parent(local)
-        return two(target)
+        tg = self.local_to_world(local) if world else self.local_to_parent(local)
+        return two(tg)
 
     def end_effectors(self, ends=[]):
         if len(self.children) == 0:
@@ -202,7 +202,7 @@ def limbs_in_soi(chain):
         a = np.dot(d, d)
         b = 2 * np.dot(f, d)
         c = np.dot(f, f) - (soi * soi)
-        if -1 < min_t(a, b, c) <= limblen:
+        if -1 < min_t(a, b, c) <= limb.limblen:
             inside.append(limb)
 
     return inside
@@ -220,24 +220,36 @@ def grad_phi(chain, influenced_limbs):
         grad += 2 * np.dot(J_i_trans, v)
 
     return -grad
+
+
+# Minimum and maximum radii of reach
+def minmax_radii(limblens):
+    maximum = sum(limblens)
+    total = maximum
+    for length in limblens:
+        rest = total - length
+        if length > rest:
+            return 1.001 * (length - rest), 0.999 * maximum
+
+    return 0, 0.999 * maximum
         
 
 # Build Kinematic Chain
 pos = np.array([0, 0])
-limblen = 80
-n_limbs = 10
-root_limb = Limb2D(None, 0.0, limblen, worldloc=pos)
-
+limblens = [40, 40, 40, 400, 40, 40, 40]  # For uniform: [80 for _ in range(8)]
+root_limb = Limb2D(None, 0.0, limblens[0], worldloc=pos)
 prev = root_limb
 dtheta = np.pi/20
-for i in range(n_limbs-1):
-    prev = Limb2D(prev, dtheta, limblen)
+for i in range(1, len(limblens)):
+    prev = Limb2D(prev, dtheta, limblens[i])
+
 
 # IK Params
-epochs = 10
-target = np.array([0, limblen*(n_limbs)])
+epochs = 1000
+target = np.array([0, sum(limblens)])
+minmax = minmax_radii(limblens)
 # Avoid params
-collider = np.array([-limblen*(n_limbs), 0])  # though it's not really a collider, just a point to avoid
+collider = np.array([-sum(limblens), 0])  # though it's not really a collider, just a point to avoid
 soi = 100  # Radius of sphere of influence. Also displayed.
 gain = 0.000004
 
@@ -251,11 +263,12 @@ assert collider_radius < soi
 
 # Switches
 show_soi = False
+show_reach = True
 
 # Main runner
 def rerun():
     global w, root_limb, target, joint_radius, i, target, target_radius, collider, soi, target_radius,\
-        collider_radius, gain, show_soi, epochs, running
+        collider_radius, gain, show_soi, epochs, running, minmax, show_reach
 
     w.configure(background='black')
 
@@ -263,6 +276,11 @@ def rerun():
         running = True
         w.delete('all')
         # DRAW 2D DISPLAY ——————————————————————————————————————————————————————————————————————
+
+        # Draw reach circles
+        origin = np.array([0, 0])
+        w.create_oval(*A(origin - minmax[0]), *A(origin + minmax[0]), fill='', outline='yellow')
+        w.create_oval(*A(origin - minmax[1]), *A(origin + minmax[1]), fill='', outline='yellow')
 
         # Draw collider
         if show_soi:
@@ -329,15 +347,15 @@ def left_drag(event):
 
 
 def motion(event):
-    global target, collider, limblen, n_limbs, mouse_mode, running
+    global target, collider, minmax, mouse_mode, running
     screen_pt = Ainv(np.array([event.x, event.y]))
+    norm = np.linalg.norm(screen_pt)
 
     if mouse_mode == 0:
-        norm = np.linalg.norm(screen_pt)
-        if norm > (limblen * n_limbs) * 0.999:
-            screen_pt = 0.999 * (limblen * n_limbs) * (screen_pt / np.linalg.norm(screen_pt))
-
-        target = screen_pt
+        # If norm is 0, don't update the target.
+        if norm != 0:
+            hat = screen_pt / norm
+            target = min(minmax[1], max(minmax[0], norm)) * hat
 
     elif mouse_mode == 1:
         collider = screen_pt

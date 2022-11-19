@@ -2,8 +2,9 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="f5cf75b8-b602-4751-bd3f-a9ff5e450bcd" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/character.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/2dfkik.py" beforeDir="false" afterPath="$PROJECT_DIR$/2dfkik.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/character.py" beforeDir="false" afterPath="$PROJECT_DIR$/character.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,7 +40,7 @@
     <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
     <property name="settings.editor.selected.configurable" value="preferences.lookFeel" />
   </component>
-  <component name="RunManager" selected="Python.character">
+  <component name="RunManager" selected="Python.2dfkik">
     <configuration name="2dfkik" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="JointKinematics" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -84,8 +85,8 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Python.character" />
         <item itemvalue="Python.2dfkik" />
+        <item itemvalue="Python.character" />
       </list>
     </recent_temporary>
   </component>

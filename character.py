@@ -90,6 +90,11 @@ class Limb2D:
         self.R = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
         self.H = np.vstack([np.hstack([self.R, np.array([self.d]).T]), np.array([0, 0, 1])])
 
+    def set_pos(self, d):
+        assert self.parent is None
+        self.d = d
+        self.set_angle(self.angle)
+
     def local_to_parent(self, point):
         assert len(point) == 3  # must be a homogeneous point
         return np.dot(self.H, point)
@@ -232,20 +237,24 @@ click_radius = joint_radius * 1.5
 running = True
 
 # Switches
-
-
+mode = True  # modes: True='ik' or False='fk'
+show_joints = False
 
 # Main runner
 def rerun():
-    global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running
+    global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, mode, show_joints
     # Setup
     w.configure(background='black')
     w.delete('all')
 
-    # Solve IK problem
-    if len(chain) > 0 and target is not None:
+    # Indicate mode
+    w.create_text(window_w / 2, window_h - 40, text='IK Mode' if mode else 'FK Mode', fill='red', font='Avenir 30')
+
+    # Solve IK problem (FK problem is just IK problem of chain length 1)
+    if len(chain) > 0 and chain[0] is not None and target is not None:
         for i in range(n_epochs):
             J = jacobian(chain)
+
             J_pinv = np.linalg.pinv(J)
 
             current = chain[-1].distal()
@@ -265,21 +274,21 @@ def rerun():
     # 1. Draw fake head
     center = A((skull.proximal() + skull.distal()) / 2)
     head_radius = limblen * 0.5
-    w.create_oval(*(center - head_radius), *(center + head_radius), fill='', outline='red', width=4)
+    w.create_oval(*(center - head_radius), *(center + head_radius), fill='white', outline='', width=4)
     # 2. Draw upper body
     root_loc = A(torso.proximal())
-    w.create_oval(*(root_loc - joint_radius), *(root_loc + joint_radius), fill='green')
+    w.create_oval(*(root_loc - joint_radius), *(root_loc + joint_radius), fill='white') if show_joints else None
     for pair in get_line_points(torso):
         p0, p1 = pair[0], pair[1]
-        w.create_line(*p0, *p1, fill='red', width=4)
-        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
+        w.create_line(*p0, *p1, fill='white', width=4)
+        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='white') if show_joints else None
     # 3. Draw legs
     pairs = get_line_points(thigh1)
     pairs.extend(get_line_points(thigh2))
     for pair in pairs:
         p0, p1 = pair[0], pair[1]
-        w.create_line(*p0, *p1, fill='red', width=4)
-        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='blue')
+        w.create_line(*p0, *p1, fill='white', width=4)
+        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='white') if show_joints else None
 
     w.update()
     running = False
@@ -287,7 +296,11 @@ def rerun():
 
 # Key bind
 def key_pressed(event):
-    pass
+    global mode
+    if event.char == ' ':
+        mode = not mode
+
+    rerun()
 
 
 # MOUSE METHODS ————————————————————————————————————————————
@@ -304,8 +317,11 @@ def mouse_click(event):
         b1 = np.linalg.norm(limb.proximal() - clicked_pt) < click_radius
         b2 = is_endeff and np.linalg.norm(limb.distal() - clicked_pt) < click_radius
         if b1 or b2:
-            chain = limb.get_chain_to_root(include_self=b2)  # TODO: account for max chain size
-            chain.reverse()
+            if mode:
+                chain = limb.get_chain_to_root(include_self=b2, max_size=10000)  # TODO: account for max chain size
+                chain.reverse()
+            else:
+                chain = [limb if b2 else limb.parent]
             break
 
 
@@ -313,28 +329,36 @@ def mouse_release(event):
     global chain, target
     chain = []
     target = None
+    rerun()
 
 
 def left_drag(event):
     '''
         Set the target based on click position + resolve FKIK problem, and redraw.
     '''
-    global target, chain, running
+    global target, chain, running, torso, thigh1, thigh2
     clicked_pt = Ainv(np.array([event.x, event.y]))
     if len(chain) > 0:
-        rootspos = chain[0].proximal()
-        reach = 0
-        for limb in chain:
-            reach += limb.limblen
+        target = clicked_pt
+        if chain[0] is None:
+            torso.set_pos(clicked_pt)
+            thigh1.set_pos(clicked_pt)
+            thigh2.set_pos(clicked_pt)
+            rerun()
+        else:
+            rootpos = chain[0].proximal()
+            reach = 0
+            for limb in chain:
+                reach += limb.limblen
 
-        dist = min(np.linalg.norm(clicked_pt - rootspos), 0.999 * reach)
-        hat = (clicked_pt - rootspos) / np.linalg.norm(clicked_pt - rootspos)
-        target = rootspos + (dist * hat)
+            if np.linalg.norm(target - rootpos) > 0.999 * reach:
+                hat = (clicked_pt - rootpos) / np.linalg.norm(clicked_pt - rootpos)
+                target = rootpos + (0.999 * reach * hat)
 
-    # 2 hours gone down the drain to figure out that this makes it friggin work
-    if not running:
-        running = True
-        rerun()
+            # 2 hours gone down the drain to figure out that this makes it friggin work
+            if not running:
+                running = True
+                rerun()
 
 
 def motion(event):
