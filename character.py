@@ -18,19 +18,14 @@ w = Canvas(root, width=window_w, height=window_h)
 
 
 # Coordinate Shift
-def A(point: np.ndarray):
-    assert len(point) == 2
-    point[0] = point[0] + window_w / 2
-    point[1] = -point[1] + window_h / 2
-    return point
+def A(pt: np.ndarray):
+    assert len(pt) == 2
+    return (pt * np.array([1, -1])) + np.array([window_w/2, window_h/2])
 
 
-def Ainv(point: np.ndarray):
-    assert len(point) == 2
-    point[0] -= window_w / 2
-    point[1] -= window_h / 2
-    point[1] *= -1
-    return point
+def Ainv(pt: np.ndarray):
+    assert len(pt) == 2
+    return (pt - np.array([window_w/2, window_h/2])) * np.array([1, -1])
 
 
 # Tack on the extra 1 at the end to make it a 3d vector
@@ -108,7 +103,6 @@ class Limb2D:
         local = three(np.array([0, 0]))
         tg = self.local_to_world(local) if world else self.local_to_parent(local)
         return two(tg)
-
 
     # Returns distal joint in target frame
     def distal(self, world=True):
@@ -204,6 +198,22 @@ def jacobian(chain, wrt=-1):
     return J
 
 
+# Get minimum and maximum reach radii of a given chain
+def minmax_radii(chain):
+    maximum = 0
+    for limb in chain:
+        maximum += limb.limblen
+
+    total = maximum
+    for limb in chain:
+        length = limb.limblen
+        rest = total - length
+        if length > rest:
+            return 1.001 * (length - rest), 0.999 * maximum
+
+    return 0, 0.999 * maximum
+
+
 # Build Kinematic Chains (3 of them)
 # 1. Some params
 rootpos = np.array([0, 0])
@@ -227,9 +237,10 @@ limbs = [thigh1, shin1, foot1, thigh2, shin2, foot2, torso, humerous1, forearm1,
 
 
 # IK Params
-n_epochs = 10
+n_epochs = 30
 chain = []
 target = None
+min_reach, max_reach = 0, 0
 
 # GUI Paras
 joint_radius = 7
@@ -240,9 +251,12 @@ running = True
 mode = True  # modes: True='ik' or False='fk'
 show_joints = False
 
+
 # Main runner
 def rerun():
-    global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, mode, show_joints
+    global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, mode, show_joints,\
+           min_reach, max_reach
+
     # Setup
     w.configure(background='black')
     w.delete('all')
@@ -267,8 +281,15 @@ def rerun():
 
     # Draw target
     if target is not None:
+        # Draw target circle
         center = A(target)
         w.create_oval(*(center - joint_radius), *(center + joint_radius), fill='', outline='yellow')
+
+        # Draw reach circles
+        if chain[0] is not None:
+            origin = torso.proximal() if mode else chain[0].proximal()
+            w.create_oval(*A(origin - min_reach), *A(origin + min_reach), fill='', outline='purple')
+            w.create_oval(*A(origin - max_reach), *A(origin + max_reach), fill='', outline='blue')
 
     # Draw character
     # 1. Draw fake head
@@ -309,7 +330,7 @@ def mouse_click(event):
          Fires when mouse button is first pressed down.
          Here, we'll build the kinematic chain for the IK problem.
     '''
-    global click_radius, limbs, chain
+    global click_radius, limbs, chain, torso
     clicked_pt = Ainv(np.array([event.x, event.y]))
     for limb in limbs:
         # Check only the proximal joint of each limb. Unless it's an end-effector, then check it's distal too.
@@ -317,16 +338,18 @@ def mouse_click(event):
         b1 = np.linalg.norm(limb.proximal() - clicked_pt) < click_radius
         b2 = is_endeff and np.linalg.norm(limb.distal() - clicked_pt) < click_radius
         if b1 or b2:
+            # Create IK chain
             if mode:
-                chain = limb.get_chain_to_root(include_self=b2, max_size=10000)  # TODO: account for max chain size
+                chain = limb.get_chain_to_root(include_self=b2, max_size=10000)  # TODO: account for variable max chain size
                 chain.reverse()
+            # Or create FK "chain".
             else:
-                chain = [limb if b2 else limb.parent]
+                chain = [limb if b2 else limb.parent]  # NOTE: Chain could contain "NONE" in case that a root is selected
             break
 
 
 def mouse_release(event):
-    global chain, target
+    global chain, target, running
     chain = []
     target = None
     rerun()
@@ -336,24 +359,25 @@ def left_drag(event):
     '''
         Set the target based on click position + resolve FKIK problem, and redraw.
     '''
-    global target, chain, running, torso, thigh1, thigh2
-    clicked_pt = Ainv(np.array([event.x, event.y]))
+    global target, chain, running, torso, thigh1, thigh2, min_reach, max_reach
+    dragged_pt = Ainv(np.array([event.x, event.y]))
     if len(chain) > 0:
-        target = clicked_pt
-        if chain[0] is None:
-            torso.set_pos(clicked_pt)
-            thigh1.set_pos(clicked_pt)
-            thigh2.set_pos(clicked_pt)
+        target = dragged_pt
+        if chain[0] is None:  # "The" root is selected (there actually are 3 roots)
+            torso.set_pos(dragged_pt)
+            thigh1.set_pos(dragged_pt)
+            thigh2.set_pos(dragged_pt)
             rerun()
         else:
+            # Compute max and min reach
             rootpos = chain[0].proximal()
-            reach = 0
-            for limb in chain:
-                reach += limb.limblen
+            min_reach, max_reach = minmax_radii(chain)
 
-            if np.linalg.norm(target - rootpos) > 0.999 * reach:
-                hat = (clicked_pt - rootpos) / np.linalg.norm(clicked_pt - rootpos)
-                target = rootpos + (0.999 * reach * hat)
+            # Compute target (If norm is 0 just keep it where it is.)
+            norm = np.linalg.norm(target - rootpos)
+            if norm != 0:
+                hat = (dragged_pt - rootpos) / norm
+                target = rootpos + (max(min_reach, min(max_reach, norm)) * hat)
 
             # 2 hours gone down the drain to figure out that this makes it friggin work
             if not running:

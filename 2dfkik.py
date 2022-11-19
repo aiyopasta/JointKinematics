@@ -17,18 +17,14 @@ w = Canvas(root, width=window_w, height=window_h)
 
 
 # Coordinate Shift
-def A(point:np.ndarray):
-    assert len(point) == 2
-    point[0] = point[0] + window_w/2
-    point[1] = -point[1] + window_h/2
-    return point
+def A(pt: np.ndarray):
+    assert len(pt) == 2
+    return (pt * np.array([1, -1])) + np.array([window_w/2, window_h/2])
 
 
-def Ainv(point:np.ndarray):
-    assert len(point) == 2
-    point[0] -= window_w / 2
-    point[1] -= window_h / 2; point[1] *= -1
-    return point
+def Ainv(pt: np.ndarray):
+    assert len(pt) == 2
+    return (pt - np.array([window_w/2, window_h/2])) * np.array([1, -1])
 
 
 # Quadratic solve
