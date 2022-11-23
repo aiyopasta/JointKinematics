@@ -239,8 +239,27 @@ class MotionCycle:
 
     # CALL THESE INSTEAD
     def update_t(self, idx: int, new_t: float):
-        assert idx != 0 and idx not in {len(self.keyframes)-1, -1}  # You must ALWAYS have keyframes at t=0.0 and t=1.0.
-        self.__update_key(idx, new_t, self.keyframes[idx][1])
+        if idx not in {0, len(self.keyframes)-1, -1}:
+            self.__update_key(idx, new_t, self.keyframes[idx][1])
+        else:
+            min_t = 10.0 / (window_w * 0.8)  # derived from the "epsilon" parameter in left_drag() function.
+            max_t = 1.0 - min_t
+            check1 = self.keyframes[-2][0] < max_t
+            check2 = self.keyframes[1][0] > min_t
+            if idx in {len(self.keyframes)-1, -1}:
+                remaining_val = new_t
+                if (new_t > 1.0 and check1) or (new_t < 1.0 and check2):
+                    for key in self.keyframes:
+                        if key[0] not in {0.0, 1.0}:
+                            key[0] = min(max(key[0] * remaining_val, min_t), max_t)
+
+            if idx == 0:
+                remaining_val = 1.0 - new_t
+                if (new_t > 0.0 and check1) or (new_t < 0.0 and check2):
+                    for key in self.keyframes:
+                        if key[0] not in {0.0, 1.0}:
+                            key[0] = min(max((key[0] * remaining_val) + new_t, min_t), max_t)
+
 
     def update_state(self, idx: int, new_state: np.ndarray):
         self.__update_key(idx, self.keyframes[idx][0], np.array(new_state))
@@ -305,7 +324,8 @@ class MotionCycle:
         if idx == -1:
             idx = n_frames - 1
         if idx in {0.0, n_frames-1}:
-            self.delete_key_begin_end(idx == n_frames-1)
+            if n_frames > 2:
+                self.delete_key_begin_end(idx == n_frames-1)
         else:
             del self.keyframes[idx]
 
@@ -429,6 +449,7 @@ min_reach, max_reach = 0, 0
 timeline_width = window_w * 0.8
 offset = ((window_w - timeline_width) / 2)
 selected_frame = 0  # -1 = none selected
+frame_dragged = False
 t = 0
 
 # GUI Params
@@ -558,18 +579,24 @@ def key_pressed(event):
         if event.char == ' ':
             fkik_mode = not fkik_mode
 
-        approx_frame = int(np.round(t * n_frames, decimals=0))
         if event.char == 'n':
             motions[current_motion].insert_key(t)
+            approx_frame = int(np.round(t * (n_frames + 1), decimals=0))
             selected_frame = approx_frame
 
+        approx_frame = int(np.round(t * n_frames, decimals=0))
         if event.char == 'a':
             approx_frame = (approx_frame - 1) % n_frames
             selected_frame = (selected_frame - 1) % n_frames if selected_frame != -1 else approx_frame
-            t = (1.0 / (n_frames - 1)) * selected_frame
+            t = motions[current_motion].keyframes[selected_frame][0]
         if event.char == 'd':
             selected_frame = (selected_frame + 1) % n_frames if selected_frame != -1 else approx_frame
-            t = (1.0 / (n_frames - 1)) * selected_frame
+            t = motions[current_motion].keyframes[selected_frame][0]
+
+        if event.char == 'x' and selected_frame != -1:
+            motions[current_motion].delete_key(selected_frame)
+            selected_frame = selected_frame % (n_frames - 1) if selected_frame != -1 else approx_frame
+            t = motions[current_motion].keyframes[selected_frame][0]
 
     if not running:
         running = True
@@ -583,7 +610,7 @@ def mouse_click(event):
          Here, we'll build the kinematic chain for the IK problem.
     '''
     global click_radius, limbs, chain, torso, main_mode, selected_frame, motions, current_motion,\
-           timeline_width, offset, t, running, guide, guide_dragged
+           timeline_width, offset, t, running, guide, guide_dragged, frame_dragged
     clicked_pt = Ainv(np.array([event.x, event.y]))
 
     if not main_mode:
@@ -612,7 +639,7 @@ def mouse_click(event):
             if abs(clicked_pt[0] - x) < dx and abs(clicked_pt[1] - y) < dy:
                 selected_frame = i
                 t = motions[current_motion].keyframes[i][0]
-                # rerun()
+                frame_dragged = True
 
         # Select pointer for dragging
         triangle_center = Ainv(np.array([(t * timeline_width) + offset, window_h - 100]))
@@ -633,7 +660,7 @@ def left_drag(event):
         Set the target based on click position + resolve FKIK problem, and redraw.
     '''
     global target, chain, running, torso, thigh1, thigh2, min_reach, max_reach, main_mode, selected_frame,\
-           t, offset, timeline_width, guide, guide_dragged
+           t, offset, timeline_width, guide, guide_dragged, frame_dragged
     dragged_pt = Ainv(np.array([event.x, event.y]))
     if not main_mode:
         # Manipulate Joints
@@ -662,16 +689,31 @@ def left_drag(event):
         if selected_frame != -1 and guide_dragged:
             guide = dragged_pt
 
+        # Drag keyframes around
+        if selected_frame != -1 and frame_dragged:
+            n_frames = len(motions[current_motion].keyframes)
+            epsilon = 10
+            max_lim = timeline_width * motions[current_motion].keyframes[(selected_frame + 1) % n_frames][0]
+            min_lim = timeline_width * motions[current_motion].keyframes[(selected_frame - 1) % n_frames][0]
+            if selected_frame in {n_frames-1, 0}:
+                max_lim = 10000
+                min_lim = -10000
+            t_ = max(min((A(dragged_pt)[0] - offset), max_lim - epsilon), min_lim + epsilon) / timeline_width
+            motions[current_motion].update_t(selected_frame, t_)
+            if selected_frame not in {0, n_frames-1}:
+                t = t_
+
     if not running:
         running = True
         rerun()
 
 
 def mouse_release(event):
-    global chain, target, running, main_mode, guide_dragged
+    global chain, target, running, main_mode, guide_dragged, frame_dragged
     if not main_mode:
         chain = []
         guide_dragged = False
+        frame_dragged = False
         target = None
 
     if not running:
