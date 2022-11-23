@@ -3,6 +3,7 @@
   <component name="ChangeListManager">
     <list default="true" id="f5cf75b8-b602-4751-bd3f-a9ff5e450bcd" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Joint Kinematics Sandbox.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/Joint Kinematics Sandbox.ipynb" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/character.py" beforeDir="false" afterPath="$PROJECT_DIR$/character.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

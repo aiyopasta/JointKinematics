@@ -261,7 +261,7 @@ class MotionCycle:
                 if min_t < t < max_t:
                     insert_idx = idx            # insert at the maximal endpoint of interval, so it's in between
 
-            prev_val = self.keyframes[insert_idx - 1][1]
+            prev_val = copy.copy(self.keyframes[insert_idx - 1][1])
             self.keyframes.insert(insert_idx, [t, prev_val])
 
     # Adds a new keyframe either at the beginning or end.
@@ -284,7 +284,7 @@ class MotionCycle:
             for key in self.keyframes:
                 key[0] *= remaining_len                    # notice how time = 0.0 remains there
             # Insert new keyframe
-            prev_val = self.keyframes[-1][1]
+            prev_val = copy.copy(self.keyframes[-1][1])
             self.keyframes.append([1.0, prev_val])
 
         # BEGINNING CASE
@@ -296,7 +296,7 @@ class MotionCycle:
                 key[0] = (key[0] * remaining_len) + shift  # notice how time = 1.0 remains there.
             self.keyframes[-1][0] = 1.0                    # but we set it explicitly just in case
             # Insert new keyframe
-            prev_val = self.keyframes[0][1]
+            prev_val = copy.copy(self.keyframes[0][1])
             self.keyframes.insert(0, [0.0, prev_val])
 
     # Delete the key at a specified index.
@@ -339,7 +339,7 @@ class MotionCycle:
                 m1, m2 = (p2 - p0) * self.tension, (p3 - p1) * self.tension
                 # Use Hermite polynomials for interpolation
                 total = ((2*np.power(t_, 3)) - (3*np.power(t_, 2)) + 1) * p1
-                total += ((np.power(t_, 3)) - (2*np.power(t_, 2)) + t) * m1
+                total += ((np.power(t_, 3)) - (2*np.power(t_, 2)) + t_) * m1
                 total += ((-2*np.power(t_, 3)) + (3*np.power(t_, 2))) * p2
                 total += (np.power(t_, 3) - np.power(t_, 2)) * m2
                 return total
@@ -410,6 +410,10 @@ def minmax_radii(chain):
 
 # Motion Cycle Params
 idle = MotionCycle(4)  # TODO: Load them from a file
+idle.insert_key(0.5)
+prev_state = idle.keyframes[1][1]
+prev_state[0] = np.pi/4
+idle.update_state(1, prev_state)
 motions = [idle]
 current_motion = 0
 
@@ -542,6 +546,7 @@ def rerun():
 # Key bind
 def key_pressed(event):
     global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running
+    n_frames = len(motions[current_motion].keyframes)
     if event.char == 'm':
         main_mode = not main_mode
 
@@ -549,17 +554,18 @@ def key_pressed(event):
         if event.char == ' ':
             fkik_mode = not fkik_mode
 
+        approx_frame = int(np.round(t * n_frames, decimals=0))
         if event.char == 'n':
             motions[current_motion].insert_key(t)
+            selected_frame = approx_frame
 
-        if selected_frame != -1:
-            n_frames = len(motions[current_motion].keyframes)
-            if event.char == 'a':
-                selected_frame = (selected_frame - 1) % n_frames
-                t = (1.0 / (n_frames - 1)) * selected_frame
-            if event.char == 'd':
-                selected_frame = (selected_frame + 1) % n_frames
-                t = (1.0 / (n_frames - 1)) * selected_frame
+        if event.char == 'a':
+            approx_frame = (approx_frame - 1) % n_frames
+            selected_frame = (selected_frame - 1) % n_frames if selected_frame != -1 else approx_frame
+            t = (1.0 / (n_frames - 1)) * selected_frame
+        if event.char == 'd':
+            selected_frame = (selected_frame + 1) % n_frames if selected_frame != -1 else approx_frame
+            t = (1.0 / (n_frames - 1)) * selected_frame
 
     if not running:
         running = True
