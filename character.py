@@ -1,3 +1,12 @@
+# TODO:
+# 1. Debug the uniform keys case: i) Why doesn't the spline go smoothly? Angle thingy... and ii) Adding new frames is weird. And handle the selected frame thing, and iii) Why roots aren't centered anymore by default?
+# 2. Add functionality to drag around the keyframes.
+# 3. Add deletion of frames.
+# 4. Add functionality to play the selected motion cycle.
+# 4. Flip through various motion cycles.
+# 5. Load and save motion cycles to file when you hit 's' in pose mode.
+
+
 # By Aditya Abhyankar, November 2022
 from tkinter import *
 import numpy as np
@@ -325,7 +334,7 @@ class MotionCycle:
                 t_ = (t - frames[i][0]) / (frames[i+1][0] - frames[i][0])
                 # Get bezier points and slopes
                 p0 = (2 * frames[i][1]) - frames[i+1][1] if i == 0 else frames[i-1][1]
-                p3 = (2 * frames[i+1][1]) - frames[i][1] if i + 2 == len(frames) else frames[i+2]
+                p3 = (2 * frames[i+1][1]) - frames[i][1] if i + 2 == len(frames) else frames[i+2][1]
                 p1, p2 = frames[i][1], frames[i+1][1]
                 m1, m2 = (p2 - p0) * self.tension, (p3 - p1) * self.tension
                 # Use Hermite polynomials for interpolation
@@ -526,19 +535,22 @@ def rerun():
     else:
         pass
 
-    running = False
     w.update()
+    running = False
 
 
 # Key bind
 def key_pressed(event):
-    global fkik_mode, main_mode, selected_frame, motions, current_motion, t
+    global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running
     if event.char == 'm':
         main_mode = not main_mode
 
     if not main_mode:
         if event.char == ' ':
             fkik_mode = not fkik_mode
+
+        if event.char == 'n':
+            motions[current_motion].insert_key(t)
 
         if selected_frame != -1:
             n_frames = len(motions[current_motion].keyframes)
@@ -549,7 +561,9 @@ def key_pressed(event):
                 selected_frame = (selected_frame + 1) % n_frames
                 t = (1.0 / (n_frames - 1)) * selected_frame
 
-    rerun()
+    if not running:
+        running = True
+        rerun()
 
 
 # MOUSE METHODS ————————————————————————————————————————————
@@ -559,7 +573,7 @@ def mouse_click(event):
          Here, we'll build the kinematic chain for the IK problem.
     '''
     global click_radius, limbs, chain, torso, main_mode, selected_frame, motions, current_motion,\
-           timeline_width, offset, t
+           timeline_width, offset, t, running
     clicked_pt = Ainv(np.array([event.x, event.y]))
 
     if not main_mode:
@@ -588,12 +602,16 @@ def mouse_click(event):
             if abs(clicked_pt[0] - x) < dx and abs(clicked_pt[1] - y) < dy:
                 selected_frame = i
                 t = motions[current_motion].keyframes[i][0]
-                rerun()
+                # rerun()
 
         # Select pointer for dragging
         triangle_center = Ainv(np.array([(t * timeline_width) + offset, window_h - 100]))
         if np.linalg.norm(triangle_center - clicked_pt) < 30:
             selected_frame = -1
+
+    if not running:
+        running = True
+        rerun()
 
 
 def mouse_release(event):
@@ -601,6 +619,9 @@ def mouse_release(event):
     if not main_mode:
         chain = []
         target = None
+
+    if not running:
+        running = True
         rerun()
 
 
@@ -619,7 +640,7 @@ def left_drag(event):
                 torso.set_pos(dragged_pt)
                 thigh1.set_pos(dragged_pt)
                 thigh2.set_pos(dragged_pt)
-                rerun()
+                # rerun()
             else:
                 # Compute max and min reach
                 rootpos = chain[0].proximal()
@@ -632,15 +653,18 @@ def left_drag(event):
                     target = rootpos + (max(min_reach, min(max_reach, norm)) * hat)
 
                 # 2 hours gone down the drain to figure out that this makes it friggin work
-                if not running:
-                    running = True
-                    rerun()
+                # if not running:
+                #     running = True
+                #     rerun()
 
         # Drag the frame pointer
-        triangle_center = Ainv(np.array([(t * timeline_width) + offset, window_h - 100]))
         if selected_frame == -1:
             t = max(min((A(dragged_pt)[0] - offset), timeline_width), 0) / timeline_width
-            rerun()
+            # rerun()
+
+    if not running:
+        running = True
+        rerun()
 
 
 
