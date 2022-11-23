@@ -410,17 +410,17 @@ def minmax_radii(chain):
 
 # Motion Cycle Params
 idle = MotionCycle(4)  # TODO: Load them from a file
-idle.insert_key(0.5)
-prev_state = idle.keyframes[1][1]
-prev_state[0] = np.pi/4
-idle.update_state(1, prev_state)
 motions = [idle]
 current_motion = 0
+
+# Guide joint
+guide = np.array([0, -limblen * 2])
+guide_dragged = False
 
 # IK Params
 n_epochs = 30
 chain = []
-target = None
+target = None  # in guide space
 min_reach, max_reach = 0, 0
 
 # Timeline Params.
@@ -439,13 +439,13 @@ running = True
 # Switches
 main_mode = False  # modes: True = Controller mode, False = Pose mode
 fkik_mode = True  # modes: True = IK Mode or False = FK Mode
-show_joints = False
+show_joints = True
 
 
 # Main runner
 def rerun():
     global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, fkik_mode, show_joints,\
-           min_reach, max_reach, main_mode, timeline_width, t, motions, current_motion, offset, selected_frame
+           min_reach, max_reach, main_mode, timeline_width, t, motions, current_motion, offset, selected_frame, guide
 
     # Setup
     w.configure(background='black')
@@ -506,33 +506,37 @@ def rerun():
         # Draw target
         if target is not None:
             # Draw target circle
-            center = A(target)
+            center = A(target + guide)
             w.create_oval(*(center - joint_radius), *(center + joint_radius), fill='', outline='yellow')
 
             # Draw reach circles
             if chain[0] is not None:
-                origin = torso.proximal() if fkik_mode else chain[0].proximal()
+                origin = torso.proximal() + guide if fkik_mode else chain[0].proximal() + guide
                 w.create_oval(*A(origin - max_reach), *A(origin + max_reach), fill='', outline='blue')
                 if fkik_mode:
                     w.create_oval(*A(origin - min_reach), *A(origin + min_reach), fill='', outline='purple')
 
+        # Draw guide
+        apothem = 10
+        w.create_rectangle(*A(guide + np.array([-apothem, +apothem])), *A(guide + np.array([+apothem, -apothem])), fill='orange')
+
         # Draw character
         # 1. Draw fake head
-        center = A((skull.proximal() + skull.distal()) / 2)
+        center = A(guide + ((skull.proximal() + skull.distal()) / 2))
         head_radius = limblen * 0.5
         w.create_oval(*(center - head_radius), *(center + head_radius), fill='white', outline='', width=4)
         # 2. Draw upper body
-        root_loc = A(torso.proximal())
+        root_loc = A(torso.proximal() + guide)
         w.create_oval(*(root_loc - joint_radius), *(root_loc + joint_radius), fill='white') if show_joints else None
         for pair in get_line_points(torso):
-            p0, p1 = pair[0], pair[1]
+            p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
             w.create_line(*p0, *p1, fill='white', width=4)
             w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='white') if show_joints else None
         # 3. Draw legs
         pairs = get_line_points(thigh1)
         pairs.extend(get_line_points(thigh2))
         for pair in pairs:
-            p0, p1 = pair[0], pair[1]
+            p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
             w.create_line(*p0, *p1, fill='white', width=4)
             w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='white') if show_joints else None
 
@@ -579,7 +583,7 @@ def mouse_click(event):
          Here, we'll build the kinematic chain for the IK problem.
     '''
     global click_radius, limbs, chain, torso, main_mode, selected_frame, motions, current_motion,\
-           timeline_width, offset, t, running
+           timeline_width, offset, t, running, guide, guide_dragged
     clicked_pt = Ainv(np.array([event.x, event.y]))
 
     if not main_mode:
@@ -588,8 +592,8 @@ def mouse_click(event):
             for limb in limbs:
                 # Check only the proximal joint of each limb. Unless it's an end-effector, then check it's distal too.
                 is_endeff = len(limb.children) == 0
-                b1 = np.linalg.norm(limb.proximal() - clicked_pt) < click_radius
-                b2 = is_endeff and np.linalg.norm(limb.distal() - clicked_pt) < click_radius
+                b1 = np.linalg.norm(limb.proximal() + guide - clicked_pt) < click_radius
+                b2 = is_endeff and np.linalg.norm(limb.distal() + guide - clicked_pt) < click_radius
                 if b1 or b2:
                     # Create IK chain
                     if fkik_mode:
@@ -615,16 +619,9 @@ def mouse_click(event):
         if np.linalg.norm(triangle_center - clicked_pt) < 30:
             selected_frame = -1
 
-    if not running:
-        running = True
-        rerun()
-
-
-def mouse_release(event):
-    global chain, target, running, main_mode
-    if not main_mode:
-        chain = []
-        target = None
+        # Select guide
+        if selected_frame != -1:
+            guide_dragged = np.linalg.norm(clicked_pt - guide) < 20
 
     if not running:
         running = True
@@ -636,17 +633,16 @@ def left_drag(event):
         Set the target based on click position + resolve FKIK problem, and redraw.
     '''
     global target, chain, running, torso, thigh1, thigh2, min_reach, max_reach, main_mode, selected_frame,\
-           t, offset, timeline_width
+           t, offset, timeline_width, guide, guide_dragged
     dragged_pt = Ainv(np.array([event.x, event.y]))
     if not main_mode:
         # Manipulate Joints
         if len(chain) > 0:
-            target = dragged_pt
+            target = dragged_pt - guide
             if chain[0] is None:  # "The" root is selected (there actually are 3 roots)
-                torso.set_pos(dragged_pt)
-                thigh1.set_pos(dragged_pt)
-                thigh2.set_pos(dragged_pt)
-                # rerun()
+                torso.set_pos(target)
+                thigh1.set_pos(target)
+                thigh2.set_pos(target)
             else:
                 # Compute max and min reach
                 rootpos = chain[0].proximal()
@@ -655,23 +651,32 @@ def left_drag(event):
                 # Compute target (If norm is 0 just keep it where it is.)
                 norm = np.linalg.norm(target - rootpos)
                 if norm != 0:
-                    hat = (dragged_pt - rootpos) / norm
+                    hat = (target - rootpos) / norm
                     target = rootpos + (max(min_reach, min(max_reach, norm)) * hat)
-
-                # 2 hours gone down the drain to figure out that this makes it friggin work
-                # if not running:
-                #     running = True
-                #     rerun()
 
         # Drag the frame pointer
         if selected_frame == -1:
             t = max(min((A(dragged_pt)[0] - offset), timeline_width), 0) / timeline_width
-            # rerun()
+
+        # Drag the guide
+        if selected_frame != -1 and guide_dragged:
+            guide = dragged_pt
 
     if not running:
         running = True
         rerun()
 
+
+def mouse_release(event):
+    global chain, target, running, main_mode, guide_dragged
+    if not main_mode:
+        chain = []
+        guide_dragged = False
+        target = None
+
+    if not running:
+        running = True
+        rerun()
 
 
 def motion(event):
