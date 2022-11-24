@@ -13,6 +13,7 @@ from tkinter import *
 import numpy as np
 import copy
 import time
+import os
 
 np.set_printoptions(suppress=True)
 
@@ -442,10 +443,23 @@ def minmax_radii(chain):
     return 0, 0.999 * maximum
 
 
-# Motion Cycle Params
-idle = MotionCycle('idle', 4)  # TODO: Load them from a file
-walk = MotionCycle('walk', 4)
-motions = [idle, walk]
+# Create / load motion cycles
+file = open('motions.txt', 'r')
+n_motions = int(file.readline())
+motions = []
+for i in range(n_motions):
+    label = file.readline()[len('motion')+1:-1]
+    duration = float(file.readline())
+    tension = float(file.readline())
+    n_frames = int(file.readline())
+    keyframes = []
+    for j in range(n_frames):
+        values = np.array(file.readline().rstrip().rsplit(' ')).astype(float)
+        keyframes.append([values[0], np.array(values[1:])])
+
+    motions.append(MotionCycle(label, duration, keyframes, tension))
+
+file.close()
 current_motion = 0
 
 # Guide joint
