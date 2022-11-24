@@ -1,16 +1,18 @@
 # TODO:
-# 1. Debug the uniform keys case: i) Why doesn't the spline go smoothly? Angle thingy... and ii) Adding new frames is weird. And handle the selected frame thing, and iii) Why roots aren't centered anymore by default?
-# 2. Add functionality to drag around the keyframes.
-# 3. Add deletion of frames.
-# 4. Add functionality to play the selected motion cycle.
-# 4. Flip through various motion cycles.
-# 5. Load and save motion cycles to file when you hit 's' in pose mode.
+# 1. Debug onion skin. Why aren't the colors appearing correctly + overlapping issue.
+# 2. Be able to play the animation in pose mode.
+# 3. Cycle through multiple motion cycles.
+# 4. Save it all to a file and be able to open them up again.
+# 5. Animate a motion cycles. Walk, ducked walk, run, idle.
+# 6. Activate 'main_mode' and blend them together based on keyboard input.
+# 7. Try adding stuff other than just gaits. Jumping, wall-jump, rolling.
 
 
 # By Aditya Abhyankar, November 2022
 from tkinter import *
 import numpy as np
 import copy
+import time
 
 np.set_printoptions(suppress=True)
 
@@ -206,9 +208,10 @@ class MotionCycle:
                               np.pi / 2, -3 * np.pi / 4, np.pi / 4, np.pi / 2, np.pi / 4, 0,             # Upper body
                               0, limblen * 2])                                                   # root pos wrt guide
 
-    def __init__(self, duration, keyframes=[], tension=0.5):
+    def __init__(self, name, duration, keyframes=[], tension=0.5):
         '''
-            duration: Length of time the animation will take place
+            name: String
+            duration: Length of time in seconds (floating point) the animation will take place
             keyframes: A list of lists of size 2 that contain: a time in [0, 1], and a list of 14 numbers:
                        The first 12 are the LOCAL angles each of the 12 limbs make, and the final
                        2 is the (x, y) position of the root, with respect to a local, "guide joint".
@@ -219,7 +222,10 @@ class MotionCycle:
 
                        NOTE 1: Guide joint will be located at the x-value of the 3 root nodes, and some fixed y value.
                        NOTE 2: There always MUST be keyframes at times 0 and 1.
+
+            tension: Tension parameter of the cardinal spline interpolating the keyframes.
         '''
+        self.name = name
         self.duration = duration
         self.keyframes = keyframes
         if len(self.keyframes) < 2:
@@ -326,10 +332,12 @@ class MotionCycle:
         if idx in {0.0, n_frames-1}:
             if n_frames > 2:
                 self.delete_key_begin_end(idx == n_frames-1)
+            else:
+                self.keyframes[idx][1] = copy.copy(MotionCycle.default_state)
         else:
             del self.keyframes[idx]
 
-    # Deletes the key either at the beginning or end.
+    # Deletes the key either at the beginning or end, provided there are middle frames.
     def delete_key_begin_end(self, end=True):
         if end:
             del self.keyframes[-1]
@@ -342,6 +350,11 @@ class MotionCycle:
             min_t = self.keyframes[0][0]
             for key in self.keyframes:
                 key[0] = (key[0] - min_t) / (1.0 - min_t)  # notice how time = 1.0 remains there.
+
+    def frame_left_of(self, t):
+        for i in range(len(self.keyframes)-1):
+            if self.keyframes[i][0] <= t <= self.keyframes[i+1][0]:
+                return i
 
     # Evaluate cardinal spline to get exact frame.
     # NOTE: ANGLES MUST ALREADY BE ADJUSTED TO BE NICE FOR INTERPOLATION!!
@@ -365,7 +378,8 @@ class MotionCycle:
                 return total
 
     def __repr__(self):
-        return str([key[0] for key in self.keyframes])
+        #return str([key[0] for key in self.keyframes])
+        return self.name
 
 
 # Use a state vector to update limbs
@@ -429,8 +443,9 @@ def minmax_radii(chain):
 
 
 # Motion Cycle Params
-idle = MotionCycle(4)  # TODO: Load them from a file
-motions = [idle]
+idle = MotionCycle('idle', 4)  # TODO: Load them from a file
+walk = MotionCycle('walk', 4)
+motions = [idle, walk]
 current_motion = 0
 
 # Guide joint
@@ -452,6 +467,7 @@ selected_frame = 0  # -1 = none selected
 frame_dragged = False
 t = 0
 
+
 # GUI Params
 joint_radius = 7
 click_radius = joint_radius * 1.5
@@ -459,144 +475,186 @@ running = True
 
 # Switches
 main_mode = False  # modes: True = Controller mode, False = Pose mode
-fkik_mode = True  # modes: True = IK Mode or False = FK Mode
-show_joints = True
+fkik_mode = False  # modes: True = IK Mode or False = FK Mode
+show_joints = False
+onion = True
+playing = False
 
 
 # Main runner
 def rerun():
     global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, fkik_mode, show_joints,\
-           min_reach, max_reach, main_mode, timeline_width, t, motions, current_motion, offset, selected_frame, guide
+           min_reach, max_reach, main_mode, timeline_width, t, motions, current_motion, offset, selected_frame, guide,\
+           onion, playing
 
     # Setup
     w.configure(background='black')
-    w.delete('all')
 
-    if not main_mode:
-        # Update the character joints (NOTE: If chain[0] is None it means we moved "the" root.)
-        if len(chain) > 0 and chain[0] is not None and target is not None:
-            # Solve IK problem (FK problem is just IK problem of chain length 1)
-            for i in range(n_epochs):
-                J = jacobian(chain)
-                J_pinv = np.linalg.pinv(J)
-                current = chain[-1].distal()
-                update = np.array([np.dot(J_pinv, (target - current))]).T
-                theta_n = np.array([limb.angle for limb in chain])
-                theta_nplus1 = np.array([theta_n]).T + update
-                for theta, limb in zip(theta_nplus1.T[0], chain):
-                    limb.set_angle(theta)
+    while playing or running:
+        w.delete('all')
 
-        if len(chain) > 0 and selected_frame != -1:
-            # Update the current keyframe based on limbs
-            new_state = motions[current_motion].keyframes[selected_frame][1]
-            for i, limb in enumerate(limbs):
-                new_state[i] = limb.angle
-                if limb.parent is None:
-                    new_state[-2] = limb.d[0]
-                    new_state[-1] = limb.d[1]
-                motions[current_motion].update_state(selected_frame, new_state)
+        if not main_mode:
+            # Update the character joints (NOTE: If chain[0] is None it means we moved "the" root.)
+            if len(chain) > 0 and chain[0] is not None and target is not None:
+                # Solve IK problem (FK problem is just IK problem of chain length 1)
+                for i in range(n_epochs):
+                    J = jacobian(chain)
+                    J_pinv = np.linalg.pinv(J)
+                    current = chain[-1].distal()
+                    update = np.array([np.dot(J_pinv, (target - current))]).T
+                    theta_n = np.array([limb.angle for limb in chain])
+                    theta_nplus1 = np.array([theta_n]).T + update
+                    for theta, limb in zip(theta_nplus1.T[0], chain):
+                        limb.set_angle(theta)
 
-        # Update the character by querying the motion at t
-        state = motions[current_motion].frame(t)
-        update_limbs(state)
+            if len(chain) > 0 and selected_frame != -1:
+                # Update the current keyframe based on limbs
+                new_state = motions[current_motion].keyframes[selected_frame][1]
+                for i, limb in enumerate(limbs):
+                    new_state[i] = limb.angle
+                    if limb.parent is None:
+                        new_state[-2] = limb.d[0]
+                        new_state[-1] = limb.d[1]
+                    motions[current_motion].update_state(selected_frame, new_state)
 
-        # Indicate FKIK mode
-        w.create_text(window_w / 2, 60, text='IK Mode' if fkik_mode else 'FK Mode', fill='red', font='Avenir 30')
+            # Indicate FKIK mode
+            w.create_text(window_w/2, 90, text='IK Mode' if fkik_mode else 'FK Mode', fill='white', font='Avenir 20')
 
-        # Draw timeline
-        # 1. Main horizontal line
-        selected = selected_frame != -1
-        x = offset
-        y = window_h - 150
-        w.create_line(x, y, x + timeline_width, y, fill='white')
-        w.create_line(x, y-40, x, y+40, fill='white')
-        w.create_line(x + timeline_width, y-40, x + timeline_width, y+40, fill='white')
-        # 2. Frame lines
-        for i in range(len(motions[current_motion].keyframes)):
-            x = (motions[current_motion].keyframes[i][0] * timeline_width) + offset
-            w.create_line(x, y-25, x, y+25, width=10, fill='red' if i == selected_frame else 'blue')
+            # Indicate Motion Cycle Numbers
+            w.create_text(window_w/2, 50, text='Editing: '+str(motions[current_motion]).upper(), fill='orange', font='Avenir 30')
 
-        # 3. Current frame pointer
-        x = (t * timeline_width) + offset
-        w.create_polygon(x, y+50, x-15, y+50+30, x+15, y+50+30, fill='red' if selected else 'blue')
+            # Draw timeline
+            # 1. Main horizontal line
+            selected = selected_frame != -1
+            x = offset
+            y = window_h - 150
+            w.create_line(x, y, x + timeline_width, y, fill='white')
+            w.create_line(x, y-40, x, y+40, fill='white')
+            w.create_line(x + timeline_width, y-40, x + timeline_width, y+40, fill='white')
+            # 2. Frame lines
+            for i in range(len(motions[current_motion].keyframes)):
+                x = (motions[current_motion].keyframes[i][0] * timeline_width) + offset
+                w.create_line(x, y-25, x, y+25, width=10, fill='red' if i == selected_frame else 'blue')
 
-        # 4. Indicate frame number or t
-        frame_text = 'Frame ' + str(selected_frame+1) + '/' + str(len(motions[current_motion].keyframes))
-        w.create_text(window_w / 2, window_h - 40, text=frame_text if selected else 't='+str(np.round(t, decimals=2)), fill='red', font='Avenir 30')
+            # 3. Current frame pointer
+            x = (t * timeline_width) + offset
+            w.create_polygon(x, y+50, x-15, y+50+30, x+15, y+50+30, fill='red' if selected else 'blue')
 
-        # Draw target
-        if target is not None:
-            # Draw target circle
-            center = A(target + guide)
-            w.create_oval(*(center - joint_radius), *(center + joint_radius), fill='', outline='yellow')
+            # 4. Indicate frame number or t
+            frame_text = 'Frame ' + str(selected_frame+1) + '/' + str(len(motions[current_motion].keyframes))
+            w.create_text(window_w / 2, window_h - 40, text=frame_text if selected else 't='+str(np.round(t, decimals=2)), fill='red', font='Avenir 30')
 
-            # Draw reach circles
-            if chain[0] is not None:
-                origin = torso.proximal() + guide if fkik_mode else chain[0].proximal() + guide
-                w.create_oval(*A(origin - max_reach), *A(origin + max_reach), fill='', outline='blue')
-                if fkik_mode:
-                    w.create_oval(*A(origin - min_reach), *A(origin + min_reach), fill='', outline='purple')
+            # Draw target
+            if target is not None:
+                # Draw target circle
+                center = A(target + guide)
+                w.create_oval(*(center - joint_radius), *(center + joint_radius), fill='', outline='yellow')
 
-        # Draw guide
-        apothem = 10
-        w.create_rectangle(*A(guide + np.array([-apothem, +apothem])), *A(guide + np.array([+apothem, -apothem])), fill='orange')
+                # Draw reach circles
+                if chain[0] is not None:
+                    origin = torso.proximal() + guide if fkik_mode else chain[0].proximal() + guide
+                    w.create_oval(*A(origin - max_reach), *A(origin + max_reach), fill='', outline='blue')
+                    if fkik_mode:
+                        w.create_oval(*A(origin - min_reach), *A(origin + min_reach), fill='', outline='purple')
 
-        # Draw character
-        # 1. Draw fake head
-        center = A(guide + ((skull.proximal() + skull.distal()) / 2))
-        head_radius = limblen * 0.5
-        w.create_oval(*(center - head_radius), *(center + head_radius), fill='white', outline='', width=4)
-        # 2. Draw upper body
-        root_loc = A(torso.proximal() + guide)
-        w.create_oval(*(root_loc - joint_radius), *(root_loc + joint_radius), fill='white') if show_joints else None
-        for pair in get_line_points(torso):
-            p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
-            w.create_line(*p0, *p1, fill='white', width=4)
-            w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='white') if show_joints else None
-        # 3. Draw legs
-        pairs = get_line_points(thigh1)
-        pairs.extend(get_line_points(thigh2))
-        for pair in pairs:
-            p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
-            w.create_line(*p0, *p1, fill='white', width=4)
-            w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill='white') if show_joints else None
+            # Draw guide
+            apothem = 10
+            w.create_rectangle(*A(guide + np.array([-apothem, +apothem])), *A(guide + np.array([+apothem, -apothem])), fill='orange')
 
-    else:
-        pass
+            # Draw character + Onion Skins
+            loop_min = max(0, selected_frame-2) if onion and selected_frame != -1 else 0
+            loop_max = selected_frame+1 if onion and selected_frame != -1 else 1
+            # We draw the onions first, and the actual one last.
+            for i in range(loop_min, loop_max):
+                multiplier = np.power(0.4, loop_max - 1 - i)
+                color = _from_rgb(tuple((np.array([255, 255, 255]) * multiplier).astype(int)))
 
-    w.update()
-    running = False
+                # Set the limbs to be at the current state, if there are any (else break).
+                t_prev = motions[current_motion].keyframes[i][0] if selected_frame != -1 else t
+                state = motions[current_motion].frame(t_prev)
+                update_limbs(state)
+
+                # 1. Draw fake head
+                center = A(guide + ((skull.proximal() + skull.distal()) / 2))
+                head_radius = limblen * 0.5
+                w.create_oval(*(center - head_radius), *(center + head_radius), fill=color, outline='', width=4)
+                # 2. Draw upper body
+                root_loc = A(torso.proximal() + guide)
+                w.create_oval(*(root_loc - joint_radius), *(root_loc + joint_radius), fill=color) if show_joints else None
+                for pair in get_line_points(torso):
+                    p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
+                    w.create_line(*p0, *p1, fill=color, width=4)
+                    w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill=color) if show_joints else None
+                # 3. Draw legs
+                pairs = get_line_points(thigh1)
+                pairs.extend(get_line_points(thigh2))
+                for pair in pairs:
+                    p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
+                    w.create_line(*p0, *p1, fill=color, width=4)
+                    w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill=color) if show_joints else None
+
+        else:
+            pass
+
+        w.update()
+        running = False
+        if playing:
+            dt = 0.005
+            t = (t + dt) % 1.0
+            time.sleep(dt)
+
+# From https://stackoverflow.com/questions/51591456/can-i-use-rgb-in-tkinter
+def _from_rgb(rgb):
+    """translates an rgb tuple of int to a tkinter friendly color code
+    """
+    return "#%02x%02x%02x" % rgb
 
 
 # Key bind
 def key_pressed(event):
-    global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running
+    global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running, playing
     n_frames = len(motions[current_motion].keyframes)
     if event.char == 'm':
         main_mode = not main_mode
 
     if not main_mode:
-        if event.char == ' ':
-            fkik_mode = not fkik_mode
+        if not playing:
+            if event.char == ' ':
+                fkik_mode = not fkik_mode
 
-        if event.char == 'n':
-            motions[current_motion].insert_key(t)
-            approx_frame = int(np.round(t * (n_frames + 1), decimals=0))
-            selected_frame = approx_frame
+            if event.char == 'n':
+                motions[current_motion].insert_key(t)
+                approx_frame = motions[current_motion].frame_left_of(t)
+                selected_frame = approx_frame + 1 if t != 0.0 else approx_frame
 
-        approx_frame = int(np.round(t * n_frames, decimals=0))
-        if event.char == 'a':
-            approx_frame = (approx_frame - 1) % n_frames
-            selected_frame = (selected_frame - 1) % n_frames if selected_frame != -1 else approx_frame
-            t = motions[current_motion].keyframes[selected_frame][0]
-        if event.char == 'd':
-            selected_frame = (selected_frame + 1) % n_frames if selected_frame != -1 else approx_frame
-            t = motions[current_motion].keyframes[selected_frame][0]
+            if event.char == 'a':
+                approx_frame = motions[current_motion].frame_left_of(t)
+                selected_frame = (selected_frame - 1) % n_frames if selected_frame != -1 else approx_frame
+                t = motions[current_motion].keyframes[selected_frame][0]
+            if event.char == 'd':
+                approx_frame = motions[current_motion].frame_left_of(t)
+                selected_frame = (selected_frame + 1) % n_frames if selected_frame != -1 else approx_frame + 1
+                t = motions[current_motion].keyframes[selected_frame][0]
 
-        if event.char == 'x' and selected_frame != -1:
-            motions[current_motion].delete_key(selected_frame)
-            selected_frame = selected_frame % (n_frames - 1) if selected_frame != -1 else approx_frame
-            t = motions[current_motion].keyframes[selected_frame][0]
+            if event.char == 'x' and selected_frame != -1:
+                motions[current_motion].delete_key(selected_frame)
+                approx_frame = motions[current_motion].frame_left_of(t)
+                selected_frame = selected_frame % (n_frames - 1) if selected_frame != -1 else approx_frame
+                t = motions[current_motion].keyframes[selected_frame][0]
+
+            if event.char == '.':
+                current_motion = (current_motion + 1) % len(motions)
+                selected_frame = 0
+                t = 0
+
+            if event.char == ',':
+                current_motion = (current_motion - 1) % len(motions)
+                selected_frame = 0
+                t = 0
+
+        if event.char == 'p':
+            playing = not playing
+            selected_frame = -1
 
     if not running:
         running = True
@@ -613,7 +671,7 @@ def mouse_click(event):
            timeline_width, offset, t, running, guide, guide_dragged, frame_dragged
     clicked_pt = Ainv(np.array([event.x, event.y]))
 
-    if not main_mode:
+    if not main_mode and not playing:
         # Move limbs using FKIK
         if selected_frame != -1:
             for limb in limbs:
@@ -650,7 +708,7 @@ def mouse_click(event):
         if selected_frame != -1:
             guide_dragged = np.linalg.norm(clicked_pt - guide) < 20
 
-    if not running:
+    if not running and not playing:
         running = True
         rerun()
 
@@ -662,7 +720,7 @@ def left_drag(event):
     global target, chain, running, torso, thigh1, thigh2, min_reach, max_reach, main_mode, selected_frame,\
            t, offset, timeline_width, guide, guide_dragged, frame_dragged
     dragged_pt = Ainv(np.array([event.x, event.y]))
-    if not main_mode:
+    if not main_mode and not playing:
         # Manipulate Joints
         if len(chain) > 0:
             target = dragged_pt - guide
@@ -703,7 +761,7 @@ def left_drag(event):
             if selected_frame not in {0, n_frames-1}:
                 t = t_
 
-    if not running:
+    if not running and not playing:
         running = True
         rerun()
 
@@ -716,7 +774,7 @@ def mouse_release(event):
         frame_dragged = False
         target = None
 
-    if not running:
+    if not running and not playing:
         running = True
         rerun()
 
