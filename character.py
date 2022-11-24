@@ -10,10 +10,10 @@
 
 # By Aditya Abhyankar, November 2022
 from tkinter import *
+from tkinter.messagebox import askyesno
 import numpy as np
 import copy
 import time
-import os
 
 np.set_printoptions(suppress=True)
 
@@ -24,7 +24,7 @@ window_h = 1000
 # Tkinter Setup
 root = Tk()
 root.title("2D FKIK")
-root.attributes("-topmost", True)
+# root.attributes("-topmost", True)
 root.geometry(str(window_w) + "x" + str(window_h))  # window size hardcoded
 
 w = Canvas(root, width=window_w, height=window_h)
@@ -444,7 +444,7 @@ def minmax_radii(chain):
 
 
 # Create / load motion cycles
-file = open('motions.txt', 'r')
+file = open('motions.txt', 'r+')
 n_motions = int(file.readline())
 motions = []
 for i in range(n_motions):
@@ -459,7 +459,6 @@ for i in range(n_motions):
 
     motions.append(MotionCycle(label, duration, keyframes, tension))
 
-file.close()
 current_motion = 0
 
 # Guide joint
@@ -793,6 +792,29 @@ def mouse_release(event):
         rerun()
 
 
+def save(event):
+    global motions
+    file = open('motions.txt', 'r+')
+    answer = askyesno("Save Motions", 'Save to ' + str(file.name) + '?')
+    if answer:
+        file.seek(0)
+        file.truncate()
+        file.write(str(len(motions)) + "\n")
+        for motion in motions:
+            file.write('Motion ' + motion.name.upper() + "\n")
+            file.write(str(float(motion.duration)) + "\n")
+            file.write(str(float(motion.tension)) + "\n")
+            file.write(str(len(motion.keyframes)) + "\n")
+            for frame in motion.keyframes:
+                file.write(str(frame[0]) + " ")
+                for i, value in enumerate(frame[1]):
+                    end = ' ' if i < 13 else '\n'
+                    file.write(str(float(value)) + end)
+
+
+
+
+
 def motion(event):
     pass
 
@@ -803,6 +825,7 @@ w.bind("<Button-1>", mouse_click)
 w.bind("<ButtonRelease-1>", mouse_release)
 w.bind('<B1-Motion>', left_drag)
 
+root.bind("<Command-s>", save)
 root.bind("<KeyPress>", key_pressed)
 w.pack()
 
