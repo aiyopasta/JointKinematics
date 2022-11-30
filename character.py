@@ -1,11 +1,8 @@
 # TODO:
-# 1. Debug onion skin. Why aren't the colors appearing correctly + overlapping issue.
-# 2. Be able to play the animation in pose mode.
-# 3. Cycle through multiple motion cycles.
-# 4. Save it all to a file and be able to open them up again.
-# 5. Animate a motion cycles. Walk, ducked walk, run, idle.
-# 6. Activate 'main_mode' and blend them together based on keyboard input.
-# 7. Try adding stuff other than just gaits. Jumping, wall-jump, rolling.
+# 1. Do correct interpolation of angles.
+# 2. Animate motion cycles. Walk, ducked walk, run, idle.
+# 3. Activate 'main_mode' and blend them together based on keyboard input.
+# 4. Try adding stuff other than just gaits. Jumping, wall-jump, rolling.
 
 
 # By Aditya Abhyankar, November 2022
@@ -212,7 +209,9 @@ class MotionCycle:
     def __init__(self, name, duration, keyframes=[], tension=0.5):
         '''
             name: String
-            duration: Length of time in seconds (floating point) the animation will take place
+            duration: Length of time (floating point) the animation will take place. Doesn't correspond to actual
+                      time it'll take in seconds, it only affects the parameterization. Actual time depends on the
+                      time.sleep() thingy you use for displaying canvas.
             keyframes: A list of lists of size 2 that contain: a time in [0, 1], and a list of 14 numbers:
                        The first 12 are the LOCAL angles each of the 12 limbs make, and the final
                        2 is the (x, y) position of the root, with respect to a local, "guide joint".
@@ -232,6 +231,7 @@ class MotionCycle:
         if len(self.keyframes) < 2:
             self.keyframes = [[0.0, copy.copy(MotionCycle.default_state)],
                               [1.0, copy.copy(MotionCycle.default_state)]]
+        self.__reclamp()
 
         self.tension = tension
         assert self.keyframes[0][0] == 0.0
@@ -243,6 +243,7 @@ class MotionCycle:
         assert 0 <= new_t <= 1 and len(new_state) == 14
         self.keyframes[idx][0] = new_t
         self.keyframes[idx][1] = new_state
+        self.__reclamp()
 
     # CALL THESE INSTEAD
     def update_t(self, idx: int, new_t: float):
@@ -267,9 +268,17 @@ class MotionCycle:
                         if key[0] not in {0.0, 1.0}:
                             key[0] = min(max((key[0] * remaining_val) + new_t, min_t), max_t)
 
-
     def update_state(self, idx: int, new_state: np.ndarray):
         self.__update_key(idx, self.keyframes[idx][0], np.array(new_state))
+
+    # DON'T CALL THIS FUNCTION FROM OUTSIDE
+    def __reclamp(self):
+        for i in range(1, len(self.keyframes)):
+            prev_vals = self.keyframes[i-1][1]
+            vals = self.keyframes[i][1]
+            for j in range(len(vals)-2):  # excluding the root positions (last 2 values)
+                while abs(vals[j] - prev_vals[j]) >= np.pi:
+                    vals[j] -= np.sign(vals[j] - prev_vals[j]) * 2.0 * np.pi
 
     # Inserts a keyframe at any specified time.
     def insert_key(self, t: float):
@@ -359,8 +368,9 @@ class MotionCycle:
 
     # Evaluate cardinal spline to get exact frame.
     # NOTE: ANGLES MUST ALREADY BE ADJUSTED TO BE NICE FOR INTERPOLATION!!
-    def frame(self, t):
-        assert 0 <= t <= 1 and len(self.keyframes) >= 2
+    def frame(self, u):
+        assert 0 <= u <= self.duration and len(self.keyframes) >= 2
+        t = u / self.duration
         frames = self.keyframes
         for i in range(0, len(frames)-1):
             if frames[i][0] <= t <= frames[i+1][0]:
@@ -584,7 +594,8 @@ def rerun():
 
                 # Set the limbs to be at the current state, if there are any (else break).
                 t_prev = motions[current_motion].keyframes[i][0] if selected_frame != -1 else t
-                state = motions[current_motion].frame(t_prev)
+                duration = motions[current_motion].duration
+                state = motions[current_motion].frame(t_prev * duration)
                 update_limbs(state)
 
                 # 1. Draw fake head
@@ -612,9 +623,13 @@ def rerun():
         w.update()
         running = False
         if playing:
-            dt = 0.005
+            # e.g. After n=100 iterations we'll reach t = 100 * (1 / 100) = 1, but the animation will have taken
+            # 100 * (duration / 100) = duration amount of time.
+            divisions = 100
+            dt = 1.0 / float(divisions)
             t = (t + dt) % 1.0
-            time.sleep(dt)
+            time.sleep(dt * motions[current_motion].duration)
+
 
 # From https://stackoverflow.com/questions/51591456/can-i-use-rgb-in-tkinter
 def _from_rgb(rgb):
@@ -810,9 +825,6 @@ def save(event):
                 for i, value in enumerate(frame[1]):
                     end = ' ' if i < 13 else '\n'
                     file.write(str(float(value)) + end)
-
-
-
 
 
 def motion(event):
