@@ -243,6 +243,13 @@ class MotionCycle:
         assert 0 <= new_t <= 1 and len(new_state) == 14
         self.keyframes[idx][0] = new_t
         self.keyframes[idx][1] = new_state
+
+        # First and last frames are identical, but only when it comes to angles.
+        if idx == len(self.keyframes) - 1:
+            self.keyframes[0][1][:12] = new_state[:12]
+        if idx == 0:
+            self.keyframes[len(self.keyframes) - 1][1][:12] = new_state[:12]
+
         self.__reclamp()
 
     # CALL THESE INSTEAD
@@ -473,6 +480,7 @@ current_motion = 0
 
 # Guide joint
 guide = np.array([0, -limblen * 2])
+move_guide = False  # move guide when playing animation in edit mode
 guide_dragged = False
 
 # IK Params
@@ -508,7 +516,7 @@ playing = False
 def rerun():
     global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, fkik_mode, show_joints,\
            min_reach, max_reach, main_mode, timeline_width, t, motions, current_motion, offset, selected_frame, guide,\
-           onion, playing
+           onion, playing, move_guide
 
     # Setup
     w.configure(background='black')
@@ -627,6 +635,9 @@ def rerun():
             # 100 * (duration / 100) = duration amount of time.
             divisions = 100
             dt = 1.0 / float(divisions)
+            if move_guide and t + dt >= 1.0:
+                guide[0] = (motions[current_motion].keyframes[-1][1][-2] + guide)[0]
+
             t = (t + dt) % 1.0
             time.sleep(dt * motions[current_motion].duration)
 
@@ -640,7 +651,7 @@ def _from_rgb(rgb):
 
 # Key bind
 def key_pressed(event):
-    global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running, playing
+    global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running, playing, guide, limblen, move_guide
     n_frames = len(motions[current_motion].keyframes)
     if event.char == 'm':
         main_mode = not main_mode
@@ -682,6 +693,11 @@ def key_pressed(event):
 
         if event.char == 'p':
             playing = not playing
+            if playing and move_guide:
+                guide = np.array([(-window_w/2) + 100, -limblen * 2])
+            else:
+                guide = np.array([0, -limblen * 2])
+
             selected_frame = -1
 
     if not running:
