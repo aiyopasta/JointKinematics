@@ -1,4 +1,4 @@
-# TODO:
+# TODO: FIX BUG WHERE ANGLES MESS UP SOMETIMES!!
 # 1. Do correct interpolation of angles.
 # 2. Animate motion cycles. Walk, ducked walk, run, idle.
 # 3. Activate 'main_mode' and blend them together based on keyboard input.
@@ -480,7 +480,7 @@ current_motion = 0
 
 # Guide joint
 guide = np.array([0, -limblen * 2])
-move_guide = False  # move guide when playing animation in edit mode
+move_guide = True  # move guide when playing animation in edit mode
 guide_dragged = False
 
 # IK Params
@@ -508,6 +508,7 @@ running = True
 main_mode = False  # modes: True = Controller mode, False = Pose mode
 fkik_mode = False  # modes: True = IK Mode or False = FK Mode
 show_joints = False
+show_guide = True
 onion = True
 playing = False
 
@@ -516,7 +517,7 @@ playing = False
 def rerun():
     global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, fkik_mode, show_joints,\
            min_reach, max_reach, main_mode, timeline_width, t, motions, current_motion, offset, selected_frame, guide,\
-           onion, playing, move_guide
+           onion, playing, move_guide, show_guide
 
     # Setup
     w.configure(background='black')
@@ -589,8 +590,9 @@ def rerun():
                         w.create_oval(*A(origin - min_reach), *A(origin + min_reach), fill='', outline='purple')
 
             # Draw guide
-            apothem = 10
-            w.create_rectangle(*A(guide + np.array([-apothem, +apothem])), *A(guide + np.array([+apothem, -apothem])), fill='orange')
+            if show_guide:
+                apothem = 10
+                w.create_rectangle(*A(guide + np.array([-apothem, +apothem])), *A(guide + np.array([+apothem, -apothem])), fill='orange')
 
             # Draw character + Onion Skins
             loop_min = max(0, selected_frame-2) if onion and selected_frame != -1 else 0
@@ -633,13 +635,14 @@ def rerun():
         if playing:
             # e.g. After n=100 iterations we'll reach t = 100 * (1 / 100) = 1, but the animation will have taken
             # 100 * (duration / 100) = duration amount of time.
-            divisions = 100
+            divisions = 200
             dt = 1.0 / float(divisions)
             if move_guide and t + dt >= 1.0:
                 guide[0] = (motions[current_motion].keyframes[-1][1][-2] + guide)[0]
 
             t = (t + dt) % 1.0
-            time.sleep(dt * motions[current_motion].duration)
+            #time.sleep(dt * motions[current_motion].duration)
+            time.sleep(0)
 
 
 # From https://stackoverflow.com/questions/51591456/can-i-use-rgb-in-tkinter
@@ -693,10 +696,12 @@ def key_pressed(event):
 
         if event.char == 'p':
             playing = not playing
-            if playing and move_guide:
-                guide = np.array([(-window_w/2) + 100, -limblen * 2])
-            else:
-                guide = np.array([0, -limblen * 2])
+            if move_guide:
+                if playing and move_guide:
+                    guide = np.array([(-window_w/2) + 100, -limblen * 2])
+                    # guide = np.array([0, -limblen * 2])
+                else:
+                    guide = np.array([0, -limblen * 2])
 
             selected_frame = -1
 
