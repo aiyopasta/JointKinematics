@@ -1,8 +1,12 @@
-# TODO: FIX BUG WHERE ANGLES MESS UP SOMETIMES!!
+# TODO:
 # 1. Do correct interpolation of angles.
 # 2. Animate motion cycles. Walk, ducked walk, run, idle.
 # 3. Activate 'main_mode' and blend them together based on keyboard input.
 # 4. Try adding stuff other than just gaits. Jumping, wall-jump, rolling.
+
+# Limitations:
+# 1. In edit mode, animations don't run proportionally to their durations. You have to change the number of divisions
+#    in order to speed it up or slow it down manually.
 
 
 # By Aditya Abhyankar, November 2022
@@ -28,9 +32,18 @@ w = Canvas(root, width=window_w, height=window_h)
 
 
 # Coordinate Shift
+def X(x: float):
+    return x + (window_w/2)
+
+
+def Y(y: float):
+    return -y + (window_h/2)
+
+
 def A(pt: np.ndarray):
     assert len(pt) == 2
-    return (pt * np.array([1, -1])) + np.array([window_w/2, window_h/2])
+    return np.array([X(pt[0]), Y(pt[1])])
+    # return (pt * np.array([1, -1])) + np.array([window_w/2, window_h/2])
 
 
 def Ainv(pt: np.ndarray):
@@ -414,6 +427,28 @@ def update_limbs(state):
     limbs[6].set_pos(d)
 
 
+# Use a state vector to draw limbs
+def draw_limbs(state, color='white'):
+    # 1. Draw fake head
+    center = A(guide + ((skull.proximal() + skull.distal()) / 2))
+    head_radius = limblen * 0.5
+    w.create_oval(*(center - head_radius), *(center + head_radius), fill=color, outline='', width=4)
+    # 2. Draw upper body
+    root_loc = A(torso.proximal() + guide)
+    w.create_oval(*(root_loc - joint_radius), *(root_loc + joint_radius), fill=color) if show_joints else None
+    for pair in get_line_points(torso):
+        p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
+        w.create_line(*p0, *p1, fill=color, width=4)
+        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill=color) if show_joints else None
+    # 3. Draw legs
+    pairs = get_line_points(thigh1)
+    pairs.extend(get_line_points(thigh2))
+    for pair in pairs:
+        p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
+        w.create_line(*p0, *p1, fill=color, width=4)
+        w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill=color) if show_joints else None
+
+
 # Computes the Jacobian of the joint positions wrt joint angles for the kinematic
 # chain leading up to the end effector of the input chain, via DFS starting at the root limb.
 def jacobian(chain, wrt=-1):
@@ -498,11 +533,13 @@ selected_frame = 0  # -1 = none selected
 frame_dragged = False
 t = 0
 
-
 # GUI Params
 joint_radius = 7
 click_radius = joint_radius * 1.5
 running = True
+
+# Terrain params
+floor_y = -0.8 * (window_h / 2)
 
 # Switches
 main_mode = False  # modes: True = Controller mode, False = Pose mode
@@ -517,7 +554,7 @@ playing = False
 def rerun():
     global w, torso, thigh1, thigh2, joint_radius, skull, n_epochs, chain, target, running, fkik_mode, show_joints,\
            min_reach, max_reach, main_mode, timeline_width, t, motions, current_motion, offset, selected_frame, guide,\
-           onion, playing, move_guide, show_guide
+           onion, playing, move_guide, show_guide, floor_y
 
     # Setup
     w.configure(background='black')
@@ -525,7 +562,20 @@ def rerun():
     while playing or running:
         w.delete('all')
 
-        if not main_mode:
+        # Controllable character mode
+        if main_mode:
+            # Draw floor
+            w.create_line(0, Y(floor_y), window_w, Y(floor_y), fill='green', width=12)
+
+            # Draw guide
+            if show_guide:
+                apothem = 10
+                w.create_rectangle(*A(guide + np.array([-apothem, +apothem])), *A(guide + np.array([+apothem, -apothem])), fill='orange')
+
+            time.sleep(0.001)
+
+        # Animation edit mode
+        else:
             # Update the character joints (NOTE: If chain[0] is None it means we moved "the" root.)
             if len(chain) > 0 and chain[0] is not None and target is not None:
                 # Solve IK problem (FK problem is just IK problem of chain length 1)
@@ -607,42 +657,20 @@ def rerun():
                 duration = motions[current_motion].duration
                 state = motions[current_motion].frame(t_prev * duration)
                 update_limbs(state)
+                draw_limbs(state, color)
 
-                # 1. Draw fake head
-                center = A(guide + ((skull.proximal() + skull.distal()) / 2))
-                head_radius = limblen * 0.5
-                w.create_oval(*(center - head_radius), *(center + head_radius), fill=color, outline='', width=4)
-                # 2. Draw upper body
-                root_loc = A(torso.proximal() + guide)
-                w.create_oval(*(root_loc - joint_radius), *(root_loc + joint_radius), fill=color) if show_joints else None
-                for pair in get_line_points(torso):
-                    p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
-                    w.create_line(*p0, *p1, fill=color, width=4)
-                    w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill=color) if show_joints else None
-                # 3. Draw legs
-                pairs = get_line_points(thigh1)
-                pairs.extend(get_line_points(thigh2))
-                for pair in pairs:
-                    p0, p1 = A(Ainv(pair[0]) + guide), A(Ainv(pair[1]) + guide)
-                    w.create_line(*p0, *p1, fill=color, width=4)
-                    w.create_oval(*(p1 - joint_radius), *(p1 + joint_radius), fill=color) if show_joints else None
+            running = False
+            if playing:
+                # The sleep time is constant, but the way the animations are parameterized is according to their duration.
+                divisions = 120
+                dt = 1.0 / float(divisions)
+                if move_guide and t + dt >= 1.0:
+                    guide[0] = (motions[current_motion].keyframes[-1][1][-2] + guide)[0]
 
-        else:
-            pass
+                t = (t + dt) % 1.0
+                time.sleep(0.001)
 
         w.update()
-        running = False
-        if playing:
-            # e.g. After n=100 iterations we'll reach t = 100 * (1 / 100) = 1, but the animation will have taken
-            # 100 * (duration / 100) = duration amount of time.
-            divisions = 200
-            dt = 1.0 / float(divisions)
-            if move_guide and t + dt >= 1.0:
-                guide[0] = (motions[current_motion].keyframes[-1][1][-2] + guide)[0]
-
-            t = (t + dt) % 1.0
-            #time.sleep(dt * motions[current_motion].duration)
-            time.sleep(0)
 
 
 # From https://stackoverflow.com/questions/51591456/can-i-use-rgb-in-tkinter
@@ -654,12 +682,23 @@ def _from_rgb(rgb):
 
 # Key bind
 def key_pressed(event):
-    global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running, playing, guide, limblen, move_guide
+    global fkik_mode, main_mode, selected_frame, motions, current_motion, t, running, playing, guide,\
+           limblen, move_guide, floor_y
     n_frames = len(motions[current_motion].keyframes)
     if event.char == 'm':
         main_mode = not main_mode
+        t = 0
+        if main_mode:
+            playing = False
+            guide = np.array([-window_w / 2 * 0.8, floor_y])
+        else:
+            guide = np.array([0, -limblen * 2])
 
-    if not main_mode:
+    if main_mode:
+        if event.keysym == 'Right':
+            pass
+
+    else:
         if not playing:
             if event.char == ' ':
                 fkik_mode = not fkik_mode
